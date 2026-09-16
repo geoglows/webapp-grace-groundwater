@@ -317,17 +317,20 @@ const regionSymbol = {
 };
 
 // Names are drawn by the layer rather than as separate graphics so the SDK's
-// label engine handles collisions — at world zoom most of the 81 are dropped
-// and the survivors stay readable, and zooming in reveals the rest.
+// label engine handles collisions. minScale is what keeps the map readable:
+// collision dropping alone still leaves continent zoom covered in names longer
+// than the regions under them, so nothing is labeled until the view is closer
+// in than regionLabelMinScale.
 const regionLabel = {
   labelExpressionInfo: {expression: "$feature.n"},
   labelPlacement: "always-horizontal",
+  minScale: displayConfig.regionLabelMinScale,
   symbol: {
     type: "text",
     color: [23, 37, 84, 1],
     haloColor: [255, 255, 255, 0.95],
     haloSize: 1.5,
-    font: {size: 10, weight: "bold"},
+    font: {size: 9, weight: "bold"},
   },
 };
 

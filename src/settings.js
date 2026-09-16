@@ -148,9 +148,13 @@ export const DISPLAY_DEFAULTS = {
   showBorders: envBool(import.meta.env.VITE_SETTINGS_SHOW_CELL_BORDERS, false),
   borderWidth: envNumber(import.meta.env.VITE_SETTINGS_CELL_BORDER_WIDTH, 0.5, {min: 0.5, max: 3}),
   showLegend: envBool(import.meta.env.VITE_SETTINGS_MAP_LEGEND_VISIBLE, true),
-  // Region names drawn on the outlines in the regional view. The label engine
-  // drops whatever collides, so this costs nothing at world zoom.
+  // Region names drawn on the outlines in the regional view.
   showRegionNames: envBool(import.meta.env.VITE_SETTINGS_SHOW_REGION_NAMES, true),
+  // Labels stay off until the view is zoomed in past this scale. Collision
+  // dropping alone is not enough at continent zoom: the names that survive are
+  // still longer than the regions they sit on, so they read as a wall of text
+  // over the map. ~1:10M is a few states across. Larger shows them sooner.
+  regionLabelMinScale: envNumber(import.meta.env.VITE_SETTINGS_REGION_LABEL_MIN_SCALE, 10_000_000, {min: 0}),
   // The 3 degree GRACE mascon outlines. Off by default: it is an interpretation
   // aid, not data, and turning it on is what pays for the GeoJSON download.
   showMascons: envBool(import.meta.env.VITE_SETTINGS_SHOW_MASCONS, false),
