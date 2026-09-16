@@ -153,10 +153,10 @@ export const DISPLAY_DEFAULTS = {
   // Labels stay off until the view is zoomed in past this scale. Collision
   // dropping alone is not enough at continent zoom: the names that survive are
   // still longer than the regions they sit on, so they read as a wall of text
-  // over the map. This sits just under the opening view's scale (zoom 5 is
-  // ~1:18.5M), so the map opens clean and the first zoom-in brings names up.
-  // Larger shows them sooner.
-  regionLabelMinScale: envNumber(import.meta.env.VITE_SETTINGS_REGION_LABEL_MIN_SCALE, 18_000_000, {min: 0}),
+  // over the map. This sits above the opening view's scale (zoom 5 is ~1:18.5M)
+  // so names are already up when the app loads, holding off only at continent
+  // zoom and wider. Larger shows them sooner.
+  regionLabelMinScale: envNumber(import.meta.env.VITE_SETTINGS_REGION_LABEL_MIN_SCALE, 25_000_000, {min: 0}),
   // The 3 degree GRACE mascon outlines. Off by default: it is an interpretation
   // aid, not data, and turning it on is what pays for the GeoJSON download.
   showMascons: envBool(import.meta.env.VITE_SETTINGS_SHOW_MASCONS, false),
