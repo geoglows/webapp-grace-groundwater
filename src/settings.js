@@ -122,9 +122,9 @@ export const MAP_CENTER = [
 export const MAP_ZOOM = envNumber(import.meta.env.VITE_MAP_ZOOM, 4, {min: 0, max: 46});
 
 // ---- what the app opens with -----------------------------------------------
-// "global" is the whole-world animation, "aquifer" is the regional view with
-// the aquifer outlines showing and the instructions in the chart panel.
-export const DEFAULT_VIEW = envChoice(import.meta.env.VITE_DEFAULT_VIEW, ["global", "aquifer"], "global");
+// "global" is the whole-world animation, "region" is the regional view with
+// the region outlines showing and the instructions in the chart panel.
+export const DEFAULT_VIEW = envChoice(import.meta.env.VITE_DEFAULT_VIEW, ["global", "region"], "global");
 export const DEFAULT_VARIABLE = envChoice(import.meta.env.VITE_DEFAULT_VARIABLE, VARIABLE_KEYS, "GWSa");
 export const DEFAULT_PALETTE = envChoice(import.meta.env.VITE_DEFAULT_COLOR_PALETTE, PALETTE_KEYS, "default");
 // Which variables are downloaded eagerly at startup, each in its own worker.

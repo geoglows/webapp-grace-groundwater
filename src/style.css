@@ -217,7 +217,7 @@ body.panel-resizing * {
         text-slate-700 transition hover:bg-black/10;
     }
 
-    /* The global/aquifer view buttons are a mutually exclusive toggle group —
+    /* The global/regional view buttons are a mutually exclusive toggle group —
        aria-pressed is the only state carrier (see main.js setActiveViewButton). */
     .icon-btn[aria-pressed="true"],
     .icon-btn[aria-pressed="true"]:hover {

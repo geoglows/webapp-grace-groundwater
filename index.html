@@ -28,7 +28,7 @@
     <button id="global-view-button" class="icon-btn tooltip" data-tooltip="Global Map" aria-label="Global Map" aria-pressed="true">
       <span data-icon="globe-americas" class="block size-6" aria-hidden="true"></span>
     </button>
-    <button id="refresh-layers" class="icon-btn tooltip" data-tooltip="Aquifer Scale" aria-label="Aquifer Scale" aria-pressed="false">
+    <button id="refresh-layers" class="icon-btn tooltip" data-tooltip="Regional Map" aria-label="Regional Map" aria-pressed="false">
       <span data-icon="map" class="block size-6" aria-hidden="true"></span>
     </button>
     <button id="upload-button" class="icon-btn tooltip" data-tooltip="Upload GeoJSON" aria-label="Upload GeoJSON">
@@ -44,8 +44,8 @@
 
 <div id="panel-stack" class="flex min-h-0 w-full flex-1 flex-col">
   <!-- The id is not decorative: the sketch tool and the time slider bind to this
-       map through reference-element="aquifer-map". -->
-  <arcgis-map id="aquifer-map" class="min-h-0 w-full flex-1">
+       map through reference-element="region-map". -->
+  <arcgis-map id="region-map" class="min-h-0 w-full flex-1">
     <!-- Top-left: Navigation -->
     <arcgis-zoom slot="top-left"></arcgis-zoom>
     <arcgis-expand slot="top-left" title="Basemap Gallery">
@@ -56,7 +56,7 @@
 
   <!-- Drawing tools, docked top-right via view.ui.add() so they stack with the
        progress bar and legend in the same corner instead of overlapping them. -->
-  <arcgis-sketch id="sketch-tool" reference-element="aquifer-map" title="Drawing Tools" creation-mode="single"></arcgis-sketch>
+  <arcgis-sketch id="sketch-tool" reference-element="region-map" title="Drawing Tools" creation-mode="single"></arcgis-sketch>
   <!-- Drag this to trade height between the map and the chart; double-click (or
        Home, when focused) restores the height configured in .env. Hidden along
        with the chart panel it resizes. -->
@@ -70,12 +70,12 @@
        regional view (exitGlobalView) reveals this chart when needed. -->
   <div id="timeseries-plot" class="ts-panel hidden w-full bg-white">
     <div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-neutral-700">
-      Select an aquifer, draw a polygon, or upload a boundary geojson.
+      Select a region, draw a polygon, or upload a boundary geojson.
     </div>
   </div>
 </div>
 
-<arcgis-time-slider id="time-slider" reference-element="aquifer-map" play-rate="1000" layout="compact" class="absolute"></arcgis-time-slider>
+<arcgis-time-slider id="time-slider" reference-element="region-map" play-rate="1000" layout="compact" class="absolute"></arcgis-time-slider>
 
 <!-- Overlays docked inside the map UI via view.ui.add(), which moves them into
      the arcgis-map component's shadow DOM: page stylesheets (including the

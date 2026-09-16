@@ -22,7 +22,7 @@ import * as reactiveUtils from "@arcgis/core/core/reactiveUtils.js";
 import {get} from "zarrita";
 
 import {cellPolygonFromCenter} from "./cells.js";
-import {AQUIFERS_URL, MASCONS_URL, ZARR_URL, ZARR_URL_HALF_DEGREE} from "./config.js";
+import {REGIONS_URL, MASCONS_URL, ZARR_URL, ZARR_URL_HALF_DEGREE} from "./config.js";
 import {clearCacheDB, getOrFetchCoords} from "./db.js";
 import {loadGlobalVariable} from "./globalFramesClient.js";
 import {createGlobalRenderer} from "./globalLayer.js";
@@ -304,8 +304,8 @@ const maskFill = (node, {data, shape, stride}) => {
   return {data: out, shape, stride};
 };
 const boundaryLayer = new GeoJSONLayer({
-  title: "Aquifer Boundaries",
-  url: AQUIFERS_URL,
+  title: "Region Boundaries",
+  url: REGIONS_URL,
   outFields: ["*"],
   definitionExpression: "1=1", // start with none selected
   renderer: {
@@ -330,9 +330,9 @@ const boundaryLayer = new GeoJSONLayer({
     actions: [],
     content: () => {
       const div = document.createElement("div");
-      div.innerHTML = `<div role="button" style="border: 1px solid black; padding: 8px; margin-top: 8px; text-align: center; font-weight: bold; background-color: #0079c1; color: white; cursor: pointer;">Analyze This Aquifer</div>`
+      div.innerHTML = `<div role="button" style="border: 1px solid black; padding: 8px; margin-top: 8px; text-align: center; font-weight: bold; background-color: #0079c1; color: white; cursor: pointer;">Analyze This Region</div>`
       div.onclick = () => {
-        analyzeGlobalAquifer({aquiferId: arcgisMap.view.popup.selectedFeature.attributes.id});
+        analyzeGlobalRegion({regionId: arcgisMap.view.popup.selectedFeature.attributes.id});
         arcgisMap.view.popup.close();
       }
       return div;
@@ -346,7 +346,7 @@ const boundaryLayer = new GeoJSONLayer({
 // a single outline is interpolation, not measurement.
 //
 // Outline only and popups off — a popupTemplate here would swallow the clicks
-// the aquifer layer and the cell handlers rely on, and the layer has nothing to
+// the region layer and the cell handlers rely on, and the layer has nothing to
 // say that the outline itself does not.
 const masconRenderer = () => ({
   type: "simple",
@@ -370,26 +370,26 @@ let masconLayerAdded = false;
 const applyMasconVisibility = () => {
   if (displayConfig.showMascons && !masconLayerAdded) {
     masconLayerAdded = true;
-    // Below the aquifer outlines, which stay clickable on top, and above the
+    // Below the region outlines, which stay clickable on top, and above the
     // anomaly raster, which both views insert at index 0.
     arcgisMap.map.add(masconLayer, arcgisMap.map.layers.indexOf(boundaryLayer));
   }
   masconLayer.visible = displayConfig.showMascons;
 };
 
-const analyzeGlobalAquifer = async ({aquiferId}) => {
+const analyzeGlobalRegion = async ({regionId}) => {
   // Load boundary layer + zoom
   await boundaryLayer.load();
 
   // Before adding to map (or after, either works)
-  boundaryLayer.definitionExpression = `id='${aquiferId}'`;
+  boundaryLayer.definitionExpression = `id='${regionId}'`;
   await boundaryLayer.refresh?.();
   const boundaryExtent = await boundaryLayer.queryExtent()
   const zoomPromise = arcgisMap.view.goTo(boundaryExtent.extent);
 
   // ---- Get the actual boundary polygon geometry ----
   const q = boundaryLayer.createQuery();
-  q.where = `id='${aquiferId}'`;
+  q.where = `id='${regionId}'`;
   q.returnGeometry = true;
   q.outFields = [];
 
@@ -463,9 +463,9 @@ const globalView = {
   byVar: {}
 };
 
-// The regional (aquifer scale) and global buttons form a mutually-exclusive
-// group: whichever mode is active shows its button pressed. exitGlobalView()
-// and analyzeGlobalView() are the single choke points for the two modes, so the
+// The regional and global buttons form a mutually-exclusive group: whichever
+// mode is active shows its button pressed. exitGlobalView() and
+// analyzeGlobalView() are the single choke points for the two modes, so the
 // indicator is flipped from there. aria-pressed is the only state carrier —
 // the .icon-btn[aria-pressed="true"] rule in style.css styles the pressed button.
 const regionalViewButton = document.querySelector("#refresh-layers");
@@ -489,7 +489,7 @@ let regionalVariableHandler = null;
 let analysisRunSeq = 0;
 // The polygon the showing regional analysis was run for, or null when none is
 // showing. Only the resolution switch reads it, to redo that analysis against
-// the other store instead of making the user re-select the aquifer.
+// the other store instead of making the user re-select the region.
 let lastAnalyzedPolygon = null;
 let sliderWatcherInstalled = false;
 const ensureSliderWatcher = () => {
@@ -628,7 +628,7 @@ const analyzeGlobalView = async ({keepView = false} = {}) => {
   // ---- clear any regional analysis state
   regionalVariableHandler = null;
   sketchTool.layer.removeAll();
-  // The whole-world raster covers the map; the aquifer outlines would only
+  // The whole-world raster covers the map; the region outlines would only
   // clutter it, so hide them here (exitGlobalView restores them).
   boundaryLayer.visible = false;
   boundaryLayer.definitionExpression = "1=1";
@@ -1163,8 +1163,8 @@ const bootMapUi = async () => {
 
   // Enter the view the deployment opens with (VITE_DEFAULT_VIEW) now that the
   // map is ready. For the global view that means the loading bar shows and the
-  // world fills in on first paint; for the aquifer view it means the outlines
-  // and the instructions panel, at the camera .env configured — the aquifer
+  // world fills in on first paint; for the regional view it means the outlines
+  // and the instructions panel, at the camera .env configured — the region
   // button is what re-fits the map to the outlines' extent.
   if (DEFAULT_VIEW === "global") {
     analyzeGlobalView();
