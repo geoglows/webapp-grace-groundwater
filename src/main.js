@@ -374,21 +374,32 @@ const setActiveRegion = (regionId) => {
 
 // The trailing crumb names whatever is being analyzed — a region, a drawn
 // polygon, an uploaded file. Passing null leaves "Home" alone as the only crumb.
-const setBreadcrumb = (label) => {
+//
+// home:false drops the "Home" crumb itself, for the global view: Home means the
+// full set of region outlines, which is not a parent of the whole-world
+// animation, so offering it there would be a trail that leads somewhere the
+// user did not come from.
+const setBreadcrumb = (label, {home = true} = {}) => {
   breadcrumb.querySelectorAll("[data-crumb]").forEach((el) => el.remove());
+  crumbHome.hidden = !home;
   if (!label) return;
-  const sep = document.createElement("span");
-  sep.className = "rfs-crumb-sep";
-  sep.dataset.crumb = "";
-  sep.setAttribute("aria-hidden", "true");
-  sep.textContent = "›";
+  const crumbs = [];
+  if (home) {
+    const sep = document.createElement("span");
+    sep.className = "rfs-crumb-sep";
+    sep.dataset.crumb = "";
+    sep.setAttribute("aria-hidden", "true");
+    sep.textContent = "›";
+    crumbs.push(sep);
+  }
   const current = document.createElement("span");
   current.className = "rfs-crumb-current";
   current.dataset.crumb = "";
   current.setAttribute("aria-current", "page");
   current.title = label;
   current.textContent = label;
-  breadcrumb.append(sep, current);
+  crumbs.push(current);
+  breadcrumb.append(...crumbs);
 };
 
 const buildRegionList = async () => {
@@ -710,7 +721,7 @@ const prefetchGlobalVariables = () => {
 // the whole world and rewinds to the first populated month.
 const analyzeGlobalView = async ({keepView = false} = {}) => {
   setActiveRegion(null);
-  setBreadcrumb("Global map");
+  setBreadcrumb("Global map", {home: false});
   const runId = ++globalView.runSeq;
   analysisRunSeq++; // abandon any in-flight regional analysis
   globalView.active = true;
