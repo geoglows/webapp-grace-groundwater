@@ -8,8 +8,9 @@ import "@arcgis/map-components/components/arcgis-locate";
 import "@arcgis/map-components/components/arcgis-scale-bar";
 import "@arcgis/map-components/components/arcgis-expand";
 import "@arcgis/map-components/components/arcgis-basemap-gallery";
-import "@arcgis/map-components/components/arcgis-sketch";
 import GeoJSONLayer from "@arcgis/core/layers/GeoJSONLayer.js";
+import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer.js";
+import SketchViewModel from "@arcgis/core/widgets/Sketch/SketchViewModel.js";
 import FeatureLayer from "@arcgis/core/layers/FeatureLayer.js";
 import Graphic from "@arcgis/core/Graphic.js";
 import SpatialReference from "@arcgis/core/geometry/SpatialReference.js";
@@ -66,7 +67,22 @@ const generateStops = () => {
 
 // Map elements
 const arcgisMap = document.querySelector("arcgis-map");
-const sketchTool = document.getElementById("sketch-tool");
+// Drawing is a SketchViewModel behind our own button rather than <arcgis-sketch>:
+// the widget's toolbar carried a selection arrow, five polygon drawing modes, an
+// undo/redo pair and a snapping menu, and only the mode picker can't be switched
+// off through a hide* property. Owning the button is the only way to one button.
+const drawLayer = new GraphicsLayer({title: "User drawn polygons", listMode: "hide"});
+// Shared by the sketch and by an uploaded boundary — both are "the polygon this
+// analysis is for", so both are drawn the same way.
+const drawnSymbol = {
+  type: "simple-fill",
+  color: [56, 189, 248, 0.15],
+  outline: {color: [56, 189, 248, 0.9], width: 2},
+};
+const drawControl = document.getElementById("draw-control");
+const drawButton = document.getElementById("draw-button");
+const drawLabel = drawButton.querySelector("[data-draw-label]");
+let sketch = null; // created once the view exists (bootMapUi)
 const timeControlRoot = document.getElementById("time-control");
 // Built on first use rather than at module load: its index space is the full
 // date list, which only exists after the store's time axis has been read.
@@ -730,7 +746,7 @@ const analyzeGlobalView = async ({keepView = false} = {}) => {
 
   // ---- clear any regional analysis state
   regionalVariableHandler = null;
-  sketchTool.layer.removeAll();
+  drawLayer.removeAll();
   // The whole-world raster covers the map; the region outlines would only
   // clutter it, so hide them here (exitGlobalView restores them).
   boundaryLayer.visible = false;
@@ -1162,7 +1178,7 @@ const resetLayers = () => {
   analysisRunSeq++; // abandon any in-flight regional analysis
   regionalVariableHandler = null;
   lastAnalyzedPolygon = null;
-  sketchTool.layer.removeAll();
+  drawLayer.removeAll();
   boundaryLayer.visible = true;
   boundaryLayer.definitionExpression = "1=1"; // reset to none selected
   arcgisMap.view.goTo(boundaryLayer.fullExtent);
@@ -1261,7 +1277,7 @@ const bootMapUi = async () => {
   // order: top-right holds the drawing tools, then the load-progress bar, the
   // shared color bar, and the layer dropdown beneath it; the compact time
   // slider sits bottom-left.
-  arcgisMap.view.ui.add(sketchTool, "top-right");
+  arcgisMap.view.ui.add(drawControl, "top-right");
   arcgisMap.view.ui.add(globalProgressDiv, "top-right");
   arcgisMap.view.ui.add(mapLegendDiv, "top-right");
 
@@ -1270,7 +1286,7 @@ const bootMapUi = async () => {
   // view hides the outlines entirely, so both are excluded — otherwise a click
   // meant for a vertex would kick off an analysis of whatever is underneath.
   arcgisMap.view.on("click", async (event) => {
-    if (!boundaryLayer.visible || sketchTool.activeTool) return;
+    if (!boundaryLayer.visible || sketch?.state === "active") return;
     const {results} = await arcgisMap.view.hitTest(event, {include: boundaryLayer});
     const hit = results.find((r) => r.graphic?.attributes?.id != null);
     if (hit) analyzeGlobalRegion({regionId: hit.graphic.attributes.id, name: hit.graphic.attributes.n});
@@ -1307,19 +1323,40 @@ const bootMapUi = async () => {
     clearTimeseriesPanel(appInstructions);
   }
 
-  sketchTool.availableCreateTools = ["polygon"];
-  sketchTool.hideSelectionToolsRectangleSelection = true;
-  sketchTool.hideSelectionToolsLassoSelection = true;
-  sketchTool.layer.title = "User drawn polygons";
-  sketchTool.addEventListener("arcgisCreate", (e) => {
-    if (e.detail.state === "start") {
-      sketchTool.layer.removeAll();
+  arcgisMap.map.add(drawLayer);
+  sketch = new SketchViewModel({
+    view: arcgisMap.view,
+    layer: drawLayer,
+    // "click" places a vertex per click and closes on double-click — the one
+    // mode worth keeping out of the five the widget offered.
+    defaultCreateOptions: {mode: "click"},
+    polygonSymbol: drawnSymbol,
+  });
+
+  const setDrawing = (drawing) => {
+    drawButton.setAttribute("aria-pressed", String(drawing));
+    drawLabel.textContent = drawing ? "Click to place points" : "Draw a polygon";
+  };
+
+  sketch.on("create", (e) => {
+    if (e.state === "start") drawLayer.removeAll();
+    if (e.state === "complete") {
+      setDrawing(false);
+      analyzeDrawnPolygon({polygon: e.graphic.geometry});
     }
-    if (e.detail.state === "complete") {
-      const polygon = e.detail.graphic.geometry;
-      analyzeDrawnPolygon({polygon});
+    if (e.state === "cancel") setDrawing(false);
+  });
+
+  // One button, two jobs: start a polygon, or abandon the one being drawn.
+  drawButton.addEventListener("click", () => {
+    if (sketch.state === "active") {
+      sketch.cancel();
+      setDrawing(false);
+      return;
     }
-  })
+    setDrawing(true);
+    sketch.create("polygon");
+  });
 
   document
     .querySelector("#refresh-layers")
@@ -1572,15 +1609,8 @@ const bootMapUi = async () => {
       const uploadedName = selectedFile.name.replace(/\.(geo)?json$/i, "");
       uploadModal.classList.add("hidden");
       setBreadcrumb(uploadedName);
-      sketchTool.layer.removeAll();
-      sketchTool.layer.add(new Graphic({
-        geometry: polygon,
-        symbol: {
-          type: "simple-fill",
-          color: [255, 255, 255, 0],
-          outline: {color: [0, 0, 0, 1], width: 2}
-        }
-      }));
+      drawLayer.removeAll();
+      drawLayer.add(new Graphic({geometry: polygon, symbol: drawnSymbol}));
       await analyzeDrawnPolygon({polygon});
     } catch (err) {
       showUploadError(err.message);

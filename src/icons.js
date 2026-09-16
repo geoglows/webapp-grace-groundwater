@@ -4,6 +4,7 @@ import cog6Tooth from "heroicons/24/outline/cog-6-tooth.svg?raw";
 import globeAmericas from "heroicons/24/outline/globe-americas.svg?raw";
 import map from "heroicons/24/outline/map.svg?raw";
 import pause from "heroicons/24/solid/pause.svg?raw";
+import pencil from "heroicons/24/outline/pencil.svg?raw";
 import play from "heroicons/24/solid/play.svg?raw";
 import xMark from "heroicons/24/outline/x-mark.svg?raw";
 
@@ -14,6 +15,7 @@ const ICONS = {
   "globe-americas": globeAmericas,
   map,
   pause,
+  pencil,
   play,
   "x-mark": xMark,
 };

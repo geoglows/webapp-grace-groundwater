@@ -96,9 +96,6 @@
     </div>
   </div>
 
-  <!-- Drawing tools, docked top-right via view.ui.add() so they stack with the
-       progress bar and legend in the same corner instead of overlapping them. -->
-  <arcgis-sketch id="sketch-tool" reference-element="region-map" title="Drawing Tools" creation-mode="single"></arcgis-sketch>
   <!-- Drag this to trade height between the map and the chart; double-click (or
        Home, when focused) restores the height configured in .env. Hidden along
        with the chart panel it resizes. -->
@@ -157,6 +154,49 @@
   <div class="global-progress-track">
     <div id="global-progress-fill" class="global-progress-fill"></div>
   </div>
+</div>
+<div id="draw-control" class="draw-control absolute">
+  <style>
+      /* Custom properties inherit through the shadow boundary, so the tokens on
+         :root still resolve here even though style.css's selectors do not. */
+      .draw-control button {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          padding: 7px 11px;
+          font-family: "Open Sans", "Segoe UI", system-ui, sans-serif;
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--text-dim, #dde5ee);
+          background: var(--surface, #111827);
+          border: 1px solid var(--border, #334155);
+          border-radius: var(--r-md, 6px);
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+          cursor: pointer;
+          transition: 0.12s;
+      }
+
+      .draw-control button:hover {
+          border-color: var(--accent, #38bdf8);
+          color: var(--accent, #38bdf8);
+      }
+
+      /* Pressed while a drawing is in progress — the click that finishes the
+         polygon is the only way out, so the button says so. */
+      .draw-control button[aria-pressed="true"] {
+          background: var(--accent, #38bdf8);
+          border-color: var(--accent, #38bdf8);
+          color: var(--on-accent, #04121b);
+      }
+
+      .draw-control svg {
+          height: 15px;
+          width: 15px;
+      }
+  </style>
+  <button id="draw-button" type="button" aria-pressed="false">
+    <span data-icon="pencil" aria-hidden="true"></span><span data-draw-label>Draw a polygon</span>
+  </button>
 </div>
 <div id="map-legend" class="map-legend absolute hidden">
   <style>
