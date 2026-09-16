@@ -103,6 +103,7 @@ const borderWidthValue = document.getElementById("border-width-value");
 const dynamicScaleToggle = document.getElementById("dynamic-scale-toggle");
 const dynamicScaleNote = document.getElementById("dynamic-scale-note");
 const legendToggle = document.getElementById("legend-toggle");
+const regionNamesToggle = document.getElementById("region-names-toggle");
 const masconToggle = document.getElementById("mascon-toggle");
 const masconWidthSlider = document.getElementById("mascon-width");
 const masconWidthValue = document.getElementById("mascon-width-value");
@@ -157,6 +158,7 @@ const syncSettingsControls = () => {
   borderWidthSlider.value = String(displayConfig.borderWidth);
   borderWidthValue.textContent = `${displayConfig.borderWidth}px`;
   legendToggle.checked = displayConfig.showLegend;
+  regionNamesToggle.checked = displayConfig.showRegionNames;
   masconToggle.checked = displayConfig.showMascons;
   masconWidthSlider.value = String(displayConfig.masconWidth);
   masconWidthValue.textContent = `${displayConfig.masconWidth}px`;
@@ -303,41 +305,43 @@ const maskFill = (node, {data, shape, stride}) => {
   for (let i = 0; i < data.length; i++) out[i] = data[i] === fill ? NaN : data[i];
   return {data: out, shape, stride};
 };
+// A tinted fill with a thin outline, rather than the heavy black outline this
+// started with: at world zoom the 81 regions overlap enough that 2px black
+// reads as scribble (dense clusters like the US High Plains lose their
+// individual shapes entirely). The fill is what makes a region legible when its
+// outline is only a few pixels across.
+const regionSymbol = {
+  type: "simple-fill",
+  color: [37, 99, 235, 0.12],
+  outline: {color: [30, 64, 175, 0.75], width: 1},
+};
+
+// Names are drawn by the layer rather than as separate graphics so the SDK's
+// label engine handles collisions — at world zoom most of the 81 are dropped
+// and the survivors stay readable, and zooming in reveals the rest.
+const regionLabel = {
+  labelExpressionInfo: {expression: "$feature.n"},
+  labelPlacement: "always-horizontal",
+  symbol: {
+    type: "text",
+    color: [23, 37, 84, 1],
+    haloColor: [255, 255, 255, 0.95],
+    haloSize: 1.5,
+    font: {size: 10, weight: "bold"},
+  },
+};
+
 const boundaryLayer = new GeoJSONLayer({
   title: "Region Boundaries",
   url: REGIONS_URL,
   outFields: ["*"],
   definitionExpression: "1=1", // start with none selected
-  renderer: {
-    type: "simple",
-    symbol: {
-      type: "simple-fill",
-      color: [255, 255, 255, 0],
-      outline: {color: [0, 0, 0, 1], width: 2}
-    }
-  },
-  popupTemplate: {
-    title: "{n}",
-    // overwriteActions: true,
-    dockEnabled: false,
-    dockOptions: {
-      buttonEnabled: false,
-      breakpoint: false
-    },
-    attributes: {
-      id: {fieldName: "id"},
-    },
-    actions: [],
-    content: () => {
-      const div = document.createElement("div");
-      div.innerHTML = `<div role="button" style="border: 1px solid black; padding: 8px; margin-top: 8px; text-align: center; font-weight: bold; background-color: #0079c1; color: white; cursor: pointer;">Analyze This Region</div>`
-      div.onclick = () => {
-        analyzeGlobalRegion({regionId: arcgisMap.view.popup.selectedFeature.attributes.id});
-        arcgisMap.view.popup.close();
-      }
-      return div;
-    }
-  }
+  renderer: {type: "simple", symbol: regionSymbol},
+  // Clicking a region analyzes it directly (see the view click handler in
+  // init) — the popup this used to open only ever held one button.
+  popupEnabled: false,
+  labelingInfo: [regionLabel],
+  labelsVisible: displayConfig.showRegionNames,
 });
 
 // The native 3 degree GRACE mascon footprints (data/mascon_boundaries.py). This
@@ -385,7 +389,9 @@ const analyzeGlobalRegion = async ({regionId}) => {
   boundaryLayer.definitionExpression = `id='${regionId}'`;
   await boundaryLayer.refresh?.();
   const boundaryExtent = await boundaryLayer.queryExtent()
-  const zoomPromise = arcgisMap.view.goTo(boundaryExtent.extent);
+  // expand() rather than a bare extent: goTo takes no padding, and a tight fit
+  // puts the region's edges against the viewport edges.
+  const zoomPromise = arcgisMap.view.goTo(boundaryExtent.extent.clone().expand(1.2));
 
   // ---- Get the actual boundary polygon geometry ----
   const q = boundaryLayer.createQuery();
@@ -1148,6 +1154,17 @@ const bootMapUi = async () => {
   arcgisMap.view.ui.add(variableSelectPanel, "top-right");
   arcgisMap.view.ui.add(timeSlider, "bottom-left");
 
+  // Clicking a region analyzes it, replacing the popup's single button. The
+  // sketch tool owns the pointer while a polygon is being drawn, and the global
+  // view hides the outlines entirely, so both are excluded — otherwise a click
+  // meant for a vertex would kick off an analysis of whatever is underneath.
+  arcgisMap.view.on("click", async (event) => {
+    if (!boundaryLayer.visible || sketchTool.activeTool) return;
+    const {results} = await arcgisMap.view.hitTest(event, {include: boundaryLayer});
+    const hit = results.find((r) => r.graphic?.attributes?.id != null);
+    if (hit) analyzeGlobalRegion({regionId: hit.graphic.attributes.id});
+  });
+
   document
     .querySelector("#global-view-button")
     .addEventListener("click", () => analyzeGlobalView());
@@ -1296,6 +1313,12 @@ const bootMapUi = async () => {
   legendToggle.addEventListener("change", (e) => {
     displayConfig.showLegend = e.target.checked;
     applyLegendVisibility();
+  });
+
+  // Region names. labelsVisible is live, so this is a repaint and nothing more.
+  regionNamesToggle.addEventListener("change", (e) => {
+    displayConfig.showRegionNames = e.target.checked;
+    boundaryLayer.labelsVisible = displayConfig.showRegionNames;
   });
 
   // GRACE mascon footprints. The first switch-on fetches the GeoJSON; every
