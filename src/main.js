@@ -172,6 +172,10 @@ const syncSettingsControls = () => {
 // every IndexedDB cache key, and every derived quantity (cell size, the raster's
 // georeferencing) follows this, so the 1.0 and 0.5 degree stores never mix —
 // and switching back to one already loaded costs nothing but a cache hit.
+// Two frames: one for the browser to lay out the chart panel that exitGlobalView
+// just revealed, one for the view's resize observer to pick up its new size.
+const afterLayout = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+
 const activeZarrUrl = () => (displayConfig.halfDegreeCells ? ZARR_URL_HALF_DEGREE : ZARR_URL);
 
 const openArray = (name) => openZarrArray(activeZarrUrl(), name);
@@ -394,7 +398,7 @@ const analyzeGlobalRegion = async ({regionId}) => {
   const boundaryExtent = await boundaryLayer.queryExtent()
   // expand() rather than a bare extent: goTo takes no padding, and a tight fit
   // puts the region's edges against the viewport edges.
-  const zoomPromise = arcgisMap.view.goTo(boundaryExtent.extent.clone().expand(1.2));
+  const zoomTarget = boundaryExtent.extent.clone().expand(1.2);
 
   // ---- Get the actual boundary polygon geometry ----
   const q = boundaryLayer.createQuery();
@@ -406,7 +410,7 @@ const analyzeGlobalRegion = async ({regionId}) => {
   if (!fs.features.length) throw new Error("No features found");
   const boundaryGeom = fs.features[0].geometry;
 
-  await main({polygon: boundaryGeom, zoomPromise});
+  await main({polygon: boundaryGeom, zoomTarget});
 }
 
 const analyzeDrawnPolygon = async ({polygon}) => {
@@ -415,8 +419,7 @@ const analyzeDrawnPolygon = async ({polygon}) => {
     polygon = shapePreservingProjectOperator.execute(polygon, SpatialReference.WGS84);
   }
   boundaryLayer.visible = false;
-  const zoomPromise = arcgisMap.view.goTo(polygon.extent);
-  await main({polygon, zoomPromise});
+  await main({polygon, zoomTarget: polygon.extent});
 }
 
 // ---- Whole-world animated view ----
@@ -752,8 +755,16 @@ const exitGlobalView = () => {
   panels.setChartVisible(true);
 };
 
-const main = async ({polygon, zoomPromise}) => {
+const main = async ({polygon, zoomTarget}) => {
   exitGlobalView();
+  // The camera starts only once the chart panel exitGlobalView just revealed has
+  // taken its space. goTo resolves its target against the viewport it was handed,
+  // so shrinking the map mid-flight re-aims the animation and the map visibly
+  // jumps. A camera the user interrupts by panning is not a failed analysis, so
+  // a rejected goTo is swallowed rather than thrown out of the await below.
+  const zoomPromise = zoomTarget
+    ? afterLayout().then(() => arcgisMap.view.goTo(zoomTarget)).catch(() => {})
+    : Promise.resolve();
   // Remembered so a resolution switch can re-run this same region against the
   // other store; cleared by resetLayers, which throws the analysis away.
   lastAnalyzedPolygon = polygon;
@@ -1092,7 +1103,7 @@ const setHalfDegreeCells = (enabled) => {
     analyzeGlobalView({keepView: true});
   } else if (lastAnalyzedPolygon) {
     // Same region, other store. The camera is already there, hence no zoom.
-    main({polygon: lastAnalyzedPolygon, zoomPromise: Promise.resolve()})
+    main({polygon: lastAnalyzedPolygon, zoomTarget: null})
       .catch((err) => console.error("Failed to re-run the analysis at the new resolution", err));
   }
   // Neither view showing (the instructions panel): the next analysis picks it up.
