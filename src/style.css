@@ -4,10 +4,6 @@
     --font-sans: Arial, Helvetica, sans-serif;
 }
 
-:root {
-    --nav-height: 70px;
-}
-
 [data-icon] > svg {
     height: 100%;
     width: 100%;
@@ -120,122 +116,271 @@ body.panel-resizing * {
     outline: none;
 }
 
-/* ------------------------------------------------------------------ *
- * Nav bar. Mirrors rfs-v2-hydroviewer/src/css/main.css so the two apps
- * present the same header when served together under apps.geoglows.
- * ------------------------------------------------------------------ */
-.nav-bar-wrapper {
+/* ── GEOGLOWS control-column theme ──────────────────────────────────────────
+   The left panel and the breadcrumb strip are styled to match aquiferx, which
+   in turn lifted its tokens from webapp-rfs-v3, so the three apps read as one
+   family: dark surfaces, Open Sans, a cyan accent, uppercase tracked-out
+   section eyebrows.
+
+   Scope is deliberate. Only the .rfs-* rules below read these tokens; the map,
+   the chart panel, the color bar and the modals stay on the light Tailwind
+   palette they already use. */
+
+@font-face {
+    font-family: "Open Sans";
+    font-weight: 400 700;
+    font-style: normal;
+    font-display: swap;
+    src: url("/fonts/opensans.woff2") format("woff2");
+}
+
+:root {
+    --bg: #0a0e17;
+    --surface: #111827;
+    --surface2: #1e293b;
+    --border: #334155;
+    --text: #f8fafc;
+    --text-dim: #dde5ee;
+    --text-faint: #b6c2d3;
+    --accent: #38bdf8;
+    --on-accent: #04121b;
+    --r-sm: 4px;
+    --r-md: 6px;
+    --r-lg: 8px;
+}
+
+/* color-scheme is what tells the browser to draw its own parts of a control
+   dark — the select's popup, the caret, selection, scrollbars. Declared here
+   rather than on :root because the rest of the app is still light and would
+   get dark native controls on white cards. */
+.rfs-panel {
+    color-scheme: dark;
+    font-family: "Open Sans", "Segoe UI", system-ui, sans-serif;
+    background: var(--surface);
+    color: var(--text);
+    border-right: 1px solid var(--border);
+}
+
+/* ── Panel header: wordmark and account beside it, then the title ── */
+.rfs-head {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px 18px;
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+}
+
+.rfs-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+/* The logo file is a dark wordmark, so it carries its own white chip rather
+   than disappearing into the panel. */
+.rfs-brand img {
+    display: block;
+    height: 30px;
+    width: auto;
+    background: #fff;
+    border-radius: var(--r-md);
+    padding: 6px 9px;
+}
+
+.rfs-title {
+    font-size: 21px;
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.015em;
+    color: var(--accent);
+}
+
+/* ── Section eyebrow: the centered, tracked-out caps heading ── */
+.rfs-eyebrow {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    text-align: center;
+    padding: 12px 18px 8px;
+}
+
+/* ── Controls block above the region list ── */
+.rfs-controls {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+}
+
+.rfs-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+    margin-bottom: 5px;
+}
+
+.rfs-select,
+.rfs-input {
+    width: 100%;
+    padding: 7px 9px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+}
+
+.rfs-select:focus-visible,
+.rfs-input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+}
+
+/* Two per row: four actions make a tidy 2x2 that stays legible at 320px, where
+   a single row would clip the labels. */
+.rfs-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-top: 12px;
+}
+
+.rfs-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 10px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    cursor: pointer;
+    transition: 0.12s;
+}
+
+.rfs-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+/* The two view buttons are a mutually exclusive pair, same as the icon buttons
+   they replaced — aria-pressed is still the only state carrier. */
+.rfs-btn[aria-pressed="true"] {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--on-accent);
+}
+
+.rfs-btn [data-icon] {
+    display: block;
+    height: 15px;
+    width: 15px;
+    flex-shrink: 0;
+}
+
+/* ── Region list ── */
+.rfs-filter {
+    padding: 0 18px 10px;
+}
+
+.rfs-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    padding-bottom: 8px;
+}
+
+.rfs-list-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 6px 18px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text-dim);
+    background: none;
+    border: 0;
+    border-left: 3px solid transparent;
+    cursor: pointer;
+}
+
+.rfs-list-item:hover {
+    background: var(--surface2);
+    color: var(--text);
+}
+
+.rfs-list-item[aria-current="true"] {
+    background: var(--surface2);
+    border-left-color: var(--accent);
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.rfs-list-empty {
+    padding: 8px 18px;
+    font-size: 12px;
+    font-style: italic;
+    color: var(--text-faint);
+}
+
+/* ── Breadcrumb strip across the top of the map column ── */
+.rfs-crumbs {
     display: flex;
     flex: 0 0 auto;
-    flex-direction: row;
     align-items: center;
-    padding: 0 25px;
-    border-bottom: 1px solid #e9ecef;
-    height: var(--nav-height);
-    background-color: #81d4fa;
+    gap: 8px;
+    padding: 10px 18px;
+    font-family: "Open Sans", "Segoe UI", system-ui, sans-serif;
+    font-size: 13px;
+    color: var(--text-dim);
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
 }
 
-.nav-bar-wrapper .back-to-portal {
-    display: flex;
-    flex-shrink: 0;
-    align-items: center;
-    padding: 6px;
-    transition: background 0.15s ease;
-}
-
-.nav-bar-wrapper .back-to-portal:hover,
-.nav-bar-wrapper .back-to-portal:focus-visible {
-    background: rgba(255, 255, 255, 0.6);
-    outline: none;
-}
-
-/* The source image is 354x60. Constraining the width and leaving both
-   dimensions `auto` lets the intrinsic ratio drive the height; pinning a
-   height instead would let max-width squash the logo horizontally. */
-.nav-bar-wrapper .back-to-portal-logo {
-    max-width: 150px;
-    width: auto;
-    height: auto;
+.rfs-crumbs [data-icon] {
     display: block;
+    height: 16px;
+    width: 16px;
+    flex-shrink: 0;
 }
 
-.nav-bar-wrapper .app-title {
-    margin-left: 8px;
-    padding-left: 8px;
-    font-size: 2rem;
-    font-weight: bolder;
-    color: #1e293b;
-    /* This title is long enough to reach the nav buttons on mid-width screens,
-       so it ellipsizes rather than pushing them off the bar. */
+.rfs-crumb {
+    padding: 0;
+    font: inherit;
+    color: var(--text);
+    font-weight: 600;
+    background: none;
+    border: 0;
+    cursor: pointer;
+    transition: color 0.12s;
+}
+
+.rfs-crumb:hover {
+    color: var(--accent);
+}
+
+/* The last crumb names where you already are, so it is a label rather than a
+   way to get there. */
+.rfs-crumb-current {
     min-width: 0;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
+    font-weight: 500;
+    color: var(--accent);
 }
 
-.nav-bar-wrapper .nav-buttons {
-    margin-left: auto;
-    display: flex;
+.rfs-crumb-sep {
     flex-shrink: 0;
-    align-items: center;
-    gap: 4px;
-}
-
-.nav-bar-wrapper .nav-auth {
-    margin-left: 12px;
-    display: flex;
-    flex-shrink: 0;
-    align-items: center;
-}
-
-/* Responsive visibility helpers. `.hide-on-small-only` shows by default and is
-   hidden below the breakpoint; `.show-on-small-only` is its inverse. Using
-   `revert` restores each element's own default display (inline for a span,
-   block for a div) instead of forcing one value. */
-.show-on-small-only {
-    display: none;
-}
-
-@media (max-width: 800px) {
-    .nav-bar-wrapper {
-        padding: 0 13px;
-    }
-
-    .hide-on-small-only {
-        display: none;
-    }
-
-    .show-on-small-only {
-        display: revert;
-    }
-}
-
-@layer components {
-    /* Square, icon-only button (nav bar) */
-    .icon-btn {
-        @apply inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-md
-        text-slate-700 transition hover:bg-black/10;
-    }
-
-    /* The global/regional view buttons are a mutually exclusive toggle group —
-       aria-pressed is the only state carrier (see main.js setActiveViewButton). */
-    .icon-btn[aria-pressed="true"],
-    .icon-btn[aria-pressed="true"]:hover {
-        @apply bg-slate-800 text-white;
-    }
-
-    .tooltip {
-        @apply relative;
-    }
-
-    .tooltip[data-tooltip]::after {
-        content: attr(data-tooltip);
-        @apply pointer-events-none absolute left-1/2 top-[calc(100%+6px)] z-50 -translate-x-1/2
-        scale-95 whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-xs font-normal text-white
-        opacity-0 shadow-md transition;
-    }
-
-    .tooltip[data-tooltip]:hover::after {
-        @apply scale-100 opacity-100;
-    }
+    color: var(--text-faint);
 }

@@ -13,34 +13,59 @@
   </script>
   <script type="module" src="/src/main.js" defer></script>
 </head>
-<body class="flex h-full flex-col overflow-hidden bg-neutral-100 font-sans">
-<header class="nav-bar-wrapper">
-  <a class="back-to-portal tooltip" href="%VITE_LOGO_HREF%" data-tooltip="%VITE_LOGO_ALT% Portal" aria-label="%VITE_LOGO_ALT% Portal">
-    <img class="back-to-portal-logo" src="%VITE_LOGO_SRC%" alt="%VITE_LOGO_ALT%" width="354" height="60"/>
-  </a>
+<body class="flex h-full overflow-hidden bg-neutral-100 font-sans">
+<!-- data-theme is what @geoglows/geoglows-auth keys its dark styling off, so the
+     account menu opens in the panel's colors rather than white. -->
+<aside class="rfs-panel flex w-80 shrink-0 flex-col" data-theme="dark">
+  <header class="rfs-head">
+    <div class="rfs-brand">
+      <a href="%VITE_LOGO_HREF%" title="%VITE_LOGO_ALT% Portal" aria-label="%VITE_LOGO_ALT% Portal">
+        <!-- width/height are the file's native size, so the aspect ratio is
+             right before the image lands. -->
+        <img src="%VITE_LOGO_SRC%" alt="%VITE_LOGO_ALT%" width="354" height="60"/>
+      </a>
+      <div id="auth-action"></div>
+    </div>
+    <h1 class="rfs-title">GRACE Regional Analyst</h1>
+  </header>
 
-  <h1 class="app-title">
-    <span class="hide-on-small-only">GRACE Regional Analyst</span>
-    <span class="show-on-small-only">GRACE</span>
-  </h1>
-
-  <div class="nav-buttons">
-    <button id="global-view-button" class="icon-btn tooltip" data-tooltip="Global Map" aria-label="Global Map" aria-pressed="true">
-      <span data-icon="globe-americas" class="block size-6" aria-hidden="true"></span>
-    </button>
-    <button id="refresh-layers" class="icon-btn tooltip" data-tooltip="Regional Map" aria-label="Regional Map" aria-pressed="false">
-      <span data-icon="map" class="block size-6" aria-hidden="true"></span>
-    </button>
-    <button id="upload-button" class="icon-btn tooltip" data-tooltip="Upload Region GeoJSON" aria-label="Upload Region GeoJSON">
-      <span data-icon="arrow-up-tray" class="block size-6" aria-hidden="true"></span>
-    </button>
-    <button id="settings-button" class="icon-btn tooltip" data-tooltip="Settings" aria-label="Settings">
-      <span data-icon="cog-6-tooth" class="block size-6" aria-hidden="true"></span>
-    </button>
+  <div class="rfs-controls">
+    <label class="rfs-label" for="variable-select">Displayed layer</label>
+    <select id="variable-select" class="rfs-select"></select>
+    <div class="rfs-actions">
+      <button id="refresh-layers" class="rfs-btn" aria-pressed="true">
+        <span data-icon="map" aria-hidden="true"></span>Regions
+      </button>
+      <button id="global-view-button" class="rfs-btn" aria-pressed="false">
+        <span data-icon="globe-americas" aria-hidden="true"></span>Global
+      </button>
+      <button id="upload-button" class="rfs-btn">
+        <span data-icon="arrow-up-tray" aria-hidden="true"></span>Upload
+      </button>
+      <button id="settings-button" class="rfs-btn">
+        <span data-icon="cog-6-tooth" aria-hidden="true"></span>Settings
+      </button>
+    </div>
   </div>
 
-  <div id="auth-action" class="nav-auth"></div>
-</header>
+  <p class="rfs-eyebrow">Regions</p>
+  <div class="rfs-filter">
+    <input id="region-filter" type="search" class="rfs-input" placeholder="Filter regions&hellip;"
+           aria-label="Filter regions" autocomplete="off">
+  </div>
+  <!-- Filled from the boundary layer once it loads (main.js). -->
+  <div id="region-list" class="rfs-list" role="list"></div>
+</aside>
+
+<main class="flex min-w-0 flex-1 flex-col">
+  <!-- Breadcrumb. "Home" is the whole-region view; the trailing crumb names
+       whatever is being analyzed, so clicking back out is one click. -->
+  <header class="rfs-crumbs">
+    <span data-icon="map" aria-hidden="true"></span>
+    <nav id="breadcrumb" class="flex min-w-0 items-center gap-2" aria-label="Breadcrumb">
+      <button id="crumb-home" class="rfs-crumb" type="button">Home</button>
+    </nav>
+  </header>
 
 <div id="panel-stack" class="flex min-h-0 w-full flex-1 flex-col">
   <!-- The id is not decorative: the sketch tool and the time slider bind to this
@@ -74,6 +99,7 @@
     </div>
   </div>
 </div>
+</main>
 
 <arcgis-time-slider id="time-slider" reference-element="region-map" play-rate="1000" layout="compact" class="absolute"></arcgis-time-slider>
 
@@ -158,37 +184,7 @@
     <span id="map-legend-max"></span>
   </div>
 </div>
-<div id="variable-select-panel" class="variable-select-panel absolute">
-  <style>
-      .variable-select-panel {
-          width: 230px;
-          background: rgba(255, 255, 255, 0.92);
-          border-radius: 4px;
-          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
-          padding: 8px 12px;
-          font-size: 12px;
-          font-family: Arial, sans-serif;
-      }
 
-      .variable-select-panel label {
-          display: block;
-          font-weight: bold;
-          margin-bottom: 4px;
-      }
-
-      .variable-select-panel select {
-          width: 100%;
-          font: inherit;
-          padding: 4px 6px;
-          border: 1px solid #999;
-          border-radius: 2px;
-          background: #fff;
-          cursor: pointer;
-      }
-  </style>
-  <label for="variable-select">Displayed Layer</label>
-  <select id="variable-select"></select>
-</div>
 
 <div id="settings-modal" class="fixed inset-0 z-1000 hidden overflow-y-auto bg-black/50">
   <div class="mx-auto my-[5vh] w-[85%] max-w-[500px] rounded-lg border border-neutral-500 bg-neutral-50 p-5">

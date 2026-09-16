@@ -103,6 +103,10 @@ const borderWidthValue = document.getElementById("border-width-value");
 const dynamicScaleToggle = document.getElementById("dynamic-scale-toggle");
 const dynamicScaleNote = document.getElementById("dynamic-scale-note");
 const legendToggle = document.getElementById("legend-toggle");
+const regionList = document.getElementById("region-list");
+const regionFilter = document.getElementById("region-filter");
+const breadcrumb = document.getElementById("breadcrumb");
+const crumbHome = document.getElementById("crumb-home");
 const regionNamesToggle = document.getElementById("region-names-toggle");
 const masconToggle = document.getElementById("mascon-toggle");
 const masconWidthSlider = document.getElementById("mascon-width");
@@ -351,6 +355,86 @@ const boundaryLayer = new GeoJSONLayer({
   labelsVisible: displayConfig.showRegionNames,
 });
 
+// ---- Left panel: region list and breadcrumb --------------------------------
+// One row per region, built once from the layer's own features so the list and
+// the outlines can never disagree about what exists. Clicking a row runs the
+// same analysis clicking the polygon does.
+let regionRows = []; // {id, name, button}, in the order they are shown
+
+const setActiveRegion = (regionId) => {
+  const active = regionId == null ? null : String(regionId);
+  for (const row of regionRows) {
+    const isActive = active !== null && String(row.id) === active;
+    row.button.setAttribute("aria-current", isActive ? "true" : "false");
+    if (isActive) row.button.scrollIntoView({block: "nearest"});
+  }
+};
+
+// The trailing crumb names whatever is being analyzed — a region, a drawn
+// polygon, an uploaded file. Passing null leaves "Home" alone as the only crumb.
+const setBreadcrumb = (label) => {
+  breadcrumb.querySelectorAll("[data-crumb]").forEach((el) => el.remove());
+  if (!label) return;
+  const sep = document.createElement("span");
+  sep.className = "rfs-crumb-sep";
+  sep.dataset.crumb = "";
+  sep.setAttribute("aria-hidden", "true");
+  sep.textContent = "›";
+  const current = document.createElement("span");
+  current.className = "rfs-crumb-current";
+  current.dataset.crumb = "";
+  current.setAttribute("aria-current", "page");
+  current.title = label;
+  current.textContent = label;
+  breadcrumb.append(sep, current);
+};
+
+const buildRegionList = async () => {
+  const q = boundaryLayer.createQuery();
+  q.where = "1=1";
+  q.outFields = ["id", "n"];
+  q.returnGeometry = false;
+  const {features} = await boundaryLayer.queryFeatures(q);
+
+  regionRows = features
+    .map((f) => ({id: f.attributes.id, name: f.attributes.n}))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((row) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "rfs-list-item";
+      button.textContent = row.name;
+      button.title = row.name;
+      button.setAttribute("role", "listitem");
+      button.setAttribute("aria-current", "false");
+      button.addEventListener("click", () => analyzeGlobalRegion({regionId: row.id, name: row.name}));
+      return {...row, button};
+    });
+
+  regionList.replaceChildren(...regionRows.map((r) => r.button));
+};
+
+// Substring match on the name, case-insensitive. Hiding rather than rebuilding
+// keeps each row's listener and its aria-current state.
+const applyRegionFilter = () => {
+  const needle = regionFilter.value.trim().toLowerCase();
+  let shown = 0;
+  for (const row of regionRows) {
+    const match = !needle || row.name.toLowerCase().includes(needle);
+    row.button.hidden = !match;
+    if (match) shown++;
+  }
+  const empty = regionList.querySelector(".rfs-list-empty");
+  if (shown === 0 && !empty) {
+    const p = document.createElement("p");
+    p.className = "rfs-list-empty";
+    p.textContent = "No regions match.";
+    regionList.append(p);
+  } else if (shown > 0) {
+    empty?.remove();
+  }
+};
+
 // The native 3 degree GRACE mascon footprints (data/mascon_boundaries.py). This
 // is an interpretation aid rather than data: every half degree cell inside one
 // outline came from the same independent mascon estimate, so a gradient within
@@ -388,7 +472,9 @@ const applyMasconVisibility = () => {
   masconLayer.visible = displayConfig.showMascons;
 };
 
-const analyzeGlobalRegion = async ({regionId}) => {
+const analyzeGlobalRegion = async ({regionId, name}) => {
+  setActiveRegion(regionId);
+  setBreadcrumb(name ?? regionRows.find((r) => String(r.id) === String(regionId))?.name ?? "Region");
   // Load boundary layer + zoom
   await boundaryLayer.load();
 
@@ -419,6 +505,8 @@ const analyzeDrawnPolygon = async ({polygon}) => {
     polygon = shapePreservingProjectOperator.execute(polygon, SpatialReference.WGS84);
   }
   boundaryLayer.visible = false;
+  setActiveRegion(null);
+  if (!breadcrumb.querySelector("[data-crumb]")) setBreadcrumb("Drawn polygon");
   await main({polygon, zoomTarget: polygon.extent});
 }
 
@@ -441,7 +529,6 @@ const mapLegendBar = document.getElementById("map-legend-bar");
 const mapLegendMin = document.getElementById("map-legend-min");
 const mapLegendMax = document.getElementById("map-legend-max");
 // Layer dropdown, docked under the color bar; switches both views' data.
-const variableSelectPanel = document.getElementById("variable-select-panel");
 const variableSelect = document.getElementById("variable-select");
 syncSettingsControls(); // .env -> every control, including this dropdown
 
@@ -479,7 +566,7 @@ const globalView = {
 // mode is active shows its button pressed. exitGlobalView() and
 // analyzeGlobalView() are the single choke points for the two modes, so the
 // indicator is flipped from there. aria-pressed is the only state carrier —
-// the .icon-btn[aria-pressed="true"] rule in style.css styles the pressed button.
+// the .rfs-btn[aria-pressed="true"] rule in style.css styles the pressed button.
 const regionalViewButton = document.querySelector("#refresh-layers");
 const globalViewButton = document.querySelector("#global-view-button");
 const setActiveViewButton = (mode) => {
@@ -631,6 +718,8 @@ const prefetchGlobalVariables = () => {
 // and slider position; entering global view from anywhere else flies home to
 // the whole world and rewinds to the first populated month.
 const analyzeGlobalView = async ({keepView = false} = {}) => {
+  setActiveRegion(null);
+  setBreadcrumb("Global map");
   const runId = ++globalView.runSeq;
   analysisRunSeq++; // abandon any in-flight regional analysis
   globalView.active = true;
@@ -1064,6 +1153,8 @@ const main = async ({polygon, zoomTarget}) => {
 
 const resetLayers = () => {
   exitGlobalView();
+  setActiveRegion(null);
+  setBreadcrumb(null);
   analysisRunSeq++; // abandon any in-flight regional analysis
   regionalVariableHandler = null;
   lastAnalyzedPolygon = null;
@@ -1153,7 +1244,11 @@ const bootMapUi = async () => {
   arcgisMap.map.add(boundaryLayer);
   // Preload the boundaries for later regional use; the camera is set by whichever
   // view we start in (global by default), so don't fit to the boundary extent here.
-  boundaryLayer.load();
+  boundaryLayer.load().then(buildRegionList).catch((err) => {
+    // A panel with no rows is survivable — the outlines are still clickable —
+    // so this reports rather than throwing out of boot.
+    console.error("Could not build the region list", err);
+  });
   // Honors VITE_SETTINGS_SHOW_MASCONS; a no-op unless the deployment starts with
   // the footprints on.
   applyMasconVisibility();
@@ -1165,7 +1260,6 @@ const bootMapUi = async () => {
   arcgisMap.view.ui.add(sketchTool, "top-right");
   arcgisMap.view.ui.add(globalProgressDiv, "top-right");
   arcgisMap.view.ui.add(mapLegendDiv, "top-right");
-  arcgisMap.view.ui.add(variableSelectPanel, "top-right");
   arcgisMap.view.ui.add(timeSlider, "bottom-left");
 
   // Clicking a region analyzes it, replacing the popup's single button. The
@@ -1176,8 +1270,14 @@ const bootMapUi = async () => {
     if (!boundaryLayer.visible || sketchTool.activeTool) return;
     const {results} = await arcgisMap.view.hitTest(event, {include: boundaryLayer});
     const hit = results.find((r) => r.graphic?.attributes?.id != null);
-    if (hit) analyzeGlobalRegion({regionId: hit.graphic.attributes.id});
+    if (hit) analyzeGlobalRegion({regionId: hit.graphic.attributes.id, name: hit.graphic.attributes.n});
   });
+
+  // "Home" is the same thing the Regions button does: drop the analysis and go
+  // back to the full set of outlines.
+  crumbHome.addEventListener("click", () => resetLayers());
+
+  regionFilter.addEventListener("input", applyRegionFilter);
 
   document
     .querySelector("#global-view-button")
@@ -1466,7 +1566,9 @@ const bootMapUi = async () => {
 
     try {
       const {polygon} = await parseGeoJSONFile(selectedFile);
+      const uploadedName = selectedFile.name.replace(/\.(geo)?json$/i, "");
       uploadModal.classList.add("hidden");
+      setBreadcrumb(uploadedName);
       sketchTool.layer.removeAll();
       sketchTool.layer.add(new Graphic({
         geometry: polygon,
