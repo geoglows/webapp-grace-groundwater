@@ -3,6 +3,8 @@ import cloudArrowUp from "heroicons/24/outline/cloud-arrow-up.svg?raw";
 import cog6Tooth from "heroicons/24/outline/cog-6-tooth.svg?raw";
 import globeAmericas from "heroicons/24/outline/globe-americas.svg?raw";
 import map from "heroicons/24/outline/map.svg?raw";
+import pause from "heroicons/24/solid/pause.svg?raw";
+import play from "heroicons/24/solid/play.svg?raw";
 import xMark from "heroicons/24/outline/x-mark.svg?raw";
 
 const ICONS = {
@@ -11,6 +13,8 @@ const ICONS = {
   "cog-6-tooth": cog6Tooth,
   "globe-americas": globeAmericas,
   map,
+  pause,
+  play,
   "x-mark": xMark,
 };
 

@@ -384,3 +384,73 @@ body.panel-resizing * {
     flex-shrink: 0;
     color: var(--text-faint);
 }
+
+/* ── Animation control (timeControl.js) ──────────────────────────────────────
+   A dark card floating at the bottom of the map, matching the one aquiferx
+   puts over its raster playback. It sits in the page rather than in the map's
+   shadow DOM, which is the whole reason it can read these tokens at all. */
+.rfs-timebar {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 14px;
+    font-family: "Open Sans", "Segoe UI", system-ui, sans-serif;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+    color-scheme: dark;
+}
+
+.rfs-timebar-play {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 26px;
+    width: 26px;
+    padding: 0;
+    color: var(--text-dim);
+    background: none;
+    border: 0;
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    transition: 0.12s;
+}
+
+.rfs-timebar-play:hover {
+    background: var(--surface2);
+    color: var(--accent);
+}
+
+.rfs-timebar-play [data-icon] {
+    display: block;
+    height: 15px;
+    width: 15px;
+}
+
+/* tabular-nums so the card doesn't twitch as the date ticks over. */
+.rfs-timebar-date {
+    min-width: 62px;
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+}
+
+.rfs-range {
+    width: 260px;
+    height: 4px;
+    margin: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.rfs-range:disabled {
+    cursor: default;
+    opacity: 0.5;
+}

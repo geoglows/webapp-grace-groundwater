@@ -9,7 +9,6 @@ import "@arcgis/map-components/components/arcgis-scale-bar";
 import "@arcgis/map-components/components/arcgis-expand";
 import "@arcgis/map-components/components/arcgis-basemap-gallery";
 import "@arcgis/map-components/components/arcgis-sketch";
-import "@arcgis/map-components/components/arcgis-time-slider";
 import GeoJSONLayer from "@arcgis/core/layers/GeoJSONLayer.js";
 import FeatureLayer from "@arcgis/core/layers/FeatureLayer.js";
 import Graphic from "@arcgis/core/Graphic.js";
@@ -17,7 +16,6 @@ import SpatialReference from "@arcgis/core/geometry/SpatialReference.js";
 import * as intersectionOperator from "@arcgis/core/geometry/operators/intersectionOperator.js";
 import * as shapePreservingProjectOperator from "@arcgis/core/geometry/operators/shapePreservingProjectOperator.js";
 import * as geodeticAreaOperator from "@arcgis/core/geometry/operators/geodeticAreaOperator.js";
-import * as reactiveUtils from "@arcgis/core/core/reactiveUtils.js";
 
 import {get} from "zarrita";
 
@@ -28,6 +26,7 @@ import {loadGlobalVariable} from "./globalFramesClient.js";
 import {createGlobalRenderer} from "./globalLayer.js";
 import {hydrateIcons} from "./icons.js";
 import {parseGeoJSONFile} from "./polygonUploads.js";
+import {createTimeControl} from "./timeControl.js";
 import {
   COLOR_PALETTES,
   DEFAULT_VIEW,
@@ -68,7 +67,10 @@ const generateStops = () => {
 // Map elements
 const arcgisMap = document.querySelector("arcgis-map");
 const sketchTool = document.getElementById("sketch-tool");
-const timeSlider = document.getElementById("time-slider");
+const timeControlRoot = document.getElementById("time-control");
+// Built on first use rather than at module load: its index space is the full
+// date list, which only exists after the store's time axis has been read.
+let timeControl = null;
 const timeseriesPlotDiv = document.getElementById("timeseries-plot");
 const appInstructions = timeseriesPlotDiv.innerHTML
 
@@ -576,7 +578,7 @@ const setActiveViewButton = (mode) => {
 };
 setActiveViewButton("global"); // whole-world animation is the initial view
 
-// Route time-slider changes to whichever view is active (regional applyEdits
+// Route animation-control steps to whichever view is active (regional applyEdits
 // or global raster). A single watcher instead of one per analysis run.
 let timeStepHandler = null;
 // Set by a completed regional analysis: re-renders the map layer + chart from
@@ -590,32 +592,21 @@ let analysisRunSeq = 0;
 // showing. Only the resolution switch reads it, to redo that analysis against
 // the other store instead of making the user re-select the region.
 let lastAnalyzedPolygon = null;
-let sliderWatcherInstalled = false;
-const ensureSliderWatcher = () => {
-  if (sliderWatcherInstalled) return;
-  sliderWatcherInstalled = true;
-  reactiveUtils.watch(
-    () => timeSlider.widget.timeExtent,
-    (te) => {
-      const current = te?.start;
-      if (!current) return;
-      const idx = timeDates.findIndex((d) => d.getTime() === current.getTime());
-      if (idx >= 0) timeStepHandler?.(idx);
-    }
-  );
+const ensureTimeControl = () => {
+  if (timeControl) return;
+  timeControl = createTimeControl({
+    root: timeControlRoot,
+    allDates: timeDates,
+    onStep: (idx) => timeStepHandler?.(idx),
+  });
 };
 
 // keepCurrent preserves the slider position across a GWSa/TWSa toggle (the
 // whole point of toggling is comparing the two at the same month); it falls
 // back to the first date when the current one isn't in the new stop list.
-const configureTimeSlider = (dates, {keepCurrent = false} = {}) => {
-  const current = timeSlider.timeExtent?.start;
-  timeSlider.mode = "instant";
-  timeSlider.fullTimeExtent = {start: dates[0], end: dates[dates.length - 1]};
-  timeSlider.stops = {dates};
-  const start = keepCurrent && current && dates.some((d) => d.getTime() === current.getTime()) ? current : dates[0];
-  timeSlider.timeExtent = {start, end: start};
-  timeSlider.labelsVisible = true;
+const configureTimeControl = (dates, {keepCurrent = false} = {}) => {
+  ensureTimeControl();
+  timeControl.configure(dates, {keepCurrent});
 };
 
 const updateGlobalProgress = (fraction) => {
@@ -735,7 +726,7 @@ const analyzeGlobalView = async ({keepView = false} = {}) => {
   boundaryLayer.definitionExpression = "1=1";
   const possiblyExistingLayer = arcgisMap.map.layers.find((l) => l.title === "GRACE Anomalies");
   if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);
-  timeSlider.widget?.stop();
+  timeControl?.stop();
   clearTimeseriesPanel();
   panels.setChartVisible(false);
 
@@ -811,11 +802,11 @@ const analyzeGlobalView = async ({keepView = false} = {}) => {
 
   const validDates = stats.validTimeIndices.map((t) => timeDates[t]);
   timeStepHandler = (idx) => globalView.renderer.drawFrame(idx);
-  ensureSliderWatcher();
-  configureTimeSlider(validDates.length ? validDates : timeDates, {keepCurrent: keepView});
-  timeSlider.playRate = GLOBAL_PLAY_RATE_MS;
-  timeSlider.loop = true; // loop when the user presses play
-  const start = timeSlider.timeExtent?.start;
+  ensureTimeControl();
+  configureTimeControl(validDates.length ? validDates : timeDates, {keepCurrent: keepView});
+  timeControl.playRate = GLOBAL_PLAY_RATE_MS;
+  timeControl.loop = true; // loop when the user presses play
+  const start = timeControl.currentDate;
   const startIdx = start ? timeDates.findIndex((d) => d.getTime() === start.getTime()) : -1;
   globalView.renderer.drawFrame(startIdx >= 0 ? startIdx : (stats.validTimeIndices[0] ?? 0));
 
@@ -829,9 +820,11 @@ const exitGlobalView = () => {
   globalView.active = false;
   setActiveViewButton("regional");
   timeStepHandler = null;
-  timeSlider.widget?.stop();
-  timeSlider.playRate = REGIONAL_PLAY_RATE_MS;
-  timeSlider.loop = false;
+  timeControl?.stop();
+  if (timeControl) {
+    timeControl.playRate = REGIONAL_PLAY_RATE_MS;
+    timeControl.loop = false;
+  }
   if (globalView.renderer) {
     globalView.renderer.clear();
     arcgisMap.map.layers.remove(globalView.renderer.layer);
@@ -1099,9 +1092,9 @@ const main = async ({polygon, zoomTarget}) => {
     }).catch(console.error);
   };
 
-  // update the timeSlider web component — stops only on dates that have data
+  // update the animation control — stops only on dates that have data
   timeStepHandler = updateMapToTimeStep;
-  ensureSliderWatcher();
+  ensureTimeControl();
 
   // Render the displayed variable: load (or reuse) its window, then restyle
   // the layer, chart, legend, and slider. Used for both the initial draw and
@@ -1139,8 +1132,8 @@ const main = async ({polygon, zoomTarget}) => {
     updateMapLegend();
     setLegendAvailable(true);
     plotTimeseries();
-    configureTimeSlider(d.sliderDates, {keepCurrent: keepSlider});
-    const start = timeSlider.timeExtent?.start;
+    configureTimeControl(d.sliderDates, {keepCurrent: keepSlider});
+    const start = timeControl.currentDate;
     const idx = start ? timeDates.findIndex((dd) => dd.getTime() === start.getTime()) : -1;
     updateMapToTimeStep(idx >= 0 ? idx : d.firstValidStep);
   };
@@ -1162,7 +1155,7 @@ const resetLayers = () => {
   boundaryLayer.visible = true;
   boundaryLayer.definitionExpression = "1=1"; // reset to none selected
   arcgisMap.view.goTo(boundaryLayer.fullExtent);
-  timeSlider.widget?.stop();
+  timeControl?.stop();
   clearTimeseriesPanel(appInstructions);
   const possiblyExistingLayer = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
   if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);
@@ -1260,7 +1253,6 @@ const bootMapUi = async () => {
   arcgisMap.view.ui.add(sketchTool, "top-right");
   arcgisMap.view.ui.add(globalProgressDiv, "top-right");
   arcgisMap.view.ui.add(mapLegendDiv, "top-right");
-  arcgisMap.view.ui.add(timeSlider, "bottom-left");
 
   // Clicking a region analyzes it, replacing the popup's single button. The
   // sketch tool owns the pointer while a polygon is being drawn, and the global

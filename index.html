@@ -70,14 +70,31 @@
 <div id="panel-stack" class="flex min-h-0 w-full flex-1 flex-col">
   <!-- The id is not decorative: the sketch tool and the time slider bind to this
        map through reference-element="region-map". -->
-  <arcgis-map id="region-map" class="min-h-0 w-full flex-1">
-    <!-- Top-left: Navigation -->
-    <arcgis-zoom slot="top-left"></arcgis-zoom>
-    <arcgis-expand slot="top-left" title="Basemap Gallery">
-      <arcgis-basemap-gallery></arcgis-basemap-gallery>
-    </arcgis-expand>
-    <arcgis-scale-bar slot="bottom-right" bar-style="line" unit="dual"></arcgis-scale-bar>
-  </arcgis-map>
+  <!-- The wrapper is what the animation control positions against: the map
+       itself is a custom element whose internals are a shadow root. -->
+  <div class="relative flex min-h-0 w-full flex-1">
+    <arcgis-map id="region-map" class="min-h-0 w-full flex-1">
+      <!-- Top-left: Navigation -->
+      <arcgis-zoom slot="top-left"></arcgis-zoom>
+      <arcgis-expand slot="top-left" title="Basemap Gallery">
+        <arcgis-basemap-gallery></arcgis-basemap-gallery>
+      </arcgis-expand>
+      <arcgis-scale-bar slot="bottom-right" bar-style="line" unit="dual"></arcgis-scale-bar>
+    </arcgis-map>
+
+    <!-- Animation control. Kept in the page rather than docked with
+         view.ui.add() so style.css reaches it — see timeControl.js. -->
+    <div id="time-control" class="rfs-timebar" hidden>
+      <button type="button" class="rfs-timebar-play" data-time-play
+              aria-label="Play animation" aria-pressed="false">
+        <span data-icon="play" data-time-play-icon aria-hidden="true"></span>
+        <span data-icon="pause" data-time-pause-icon aria-hidden="true" hidden></span>
+      </button>
+      <input type="range" class="rfs-range" data-time-range min="0" max="0" value="0"
+             aria-label="Time step">
+      <span class="rfs-timebar-date" data-time-label>&mdash;</span>
+    </div>
+  </div>
 
   <!-- Drawing tools, docked top-right via view.ui.add() so they stack with the
        progress bar and legend in the same corner instead of overlapping them. -->
@@ -100,8 +117,6 @@
   </div>
 </div>
 </main>
-
-<arcgis-time-slider id="time-slider" reference-element="region-map" play-rate="1000" layout="compact" class="absolute"></arcgis-time-slider>
 
 <!-- Overlays docked inside the map UI via view.ui.add(), which moves them into
      the arcgis-map component's shadow DOM: page stylesheets (including the
