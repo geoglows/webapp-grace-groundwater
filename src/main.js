@@ -649,7 +649,7 @@ const setGlobalGrid = (varName) => {
 // Shown in the chart area when a selected variable can't be loaded — most
 // likely one listed in the dropdown ahead of its arrays landing in the store.
 const showVariableUnavailable = (varName) => {
-  clearTimeseriesPanel(`<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-neutral-700">${VARIABLES[varName].longName} (${varName}) could not be loaded. It may not be available yet &mdash; choose another layer from the dropdown.</div>`);
+  clearTimeseriesPanel(`<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-[var(--text-faint)]">${VARIABLES[varName].longName} (${varName}) could not be loaded. It may not be available yet &mdash; choose another layer from the dropdown.</div>`);
 };
 
 // Paint a partial world sent up by a still-downloading worker. The message
@@ -1114,7 +1114,7 @@ const main = async ({polygon, zoomTarget}) => {
   const renderVariable = async ({keepSlider}) => {
     const varName = displayConfig.variable;
     if (!varData[varName]) {
-      clearTimeseriesPanel(`<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-neutral-700">Loading ${VARIABLES[varName].longName}&hellip;</div>`);
+      clearTimeseriesPanel(`<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-[var(--text-faint)]">Loading ${VARIABLES[varName].longName}&hellip;</div>`);
     }
     let d;
     try {
@@ -1134,7 +1134,7 @@ const main = async ({polygon, zoomTarget}) => {
       console.warn(`${varName} read successfully for this region but contains no data — every value is a fill value`);
       anomalyLayer.visible = false;
       setLegendAvailable(false);
-      clearTimeseriesPanel(`<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-neutral-700">${VARIABLES[varName].longName} (${varName}) has no data in this dataset &mdash; choose another layer.</div>`);
+      clearTimeseriesPanel(`<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-[var(--text-faint)]">${VARIABLES[varName].longName} (${varName}) has no data in this dataset &mdash; choose another layer.</div>`);
       return;
     }
     displayConfig.maxValue = d.maxValue;

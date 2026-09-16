@@ -35,7 +35,7 @@ const timeMarkerPlugin = {
     ctx.beginPath();
     ctx.setLineDash([4, 4]);
     ctx.lineWidth = 2;
-    ctx.strokeStyle = "#ef4444";
+    ctx.strokeStyle = "#f87171";
     ctx.moveTo(x, top);
     ctx.lineTo(x, bottom);
     ctx.stroke();
@@ -44,8 +44,16 @@ const timeMarkerPlugin = {
 };
 Chart.register(timeMarkerPlugin);
 
-const LINE_COLOR = "#1c6eec";
-const BAND_COLOR = "rgba(28,110,236,0.25)";
+// Read at call time rather than at module load: the tokens live on :root in
+// style.css, which is a separate stylesheet and may not have applied yet when
+// this module is first evaluated.
+const token = (name, fallback) =>
+  getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
+
+// Brighter than the map's #1c6eec, which is the blue end of the anomaly scale
+// and reads as near-black against a --surface ground.
+const LINE_COLOR = "#60a5fa";
+const BAND_COLOR = "rgba(96,165,250,0.25)";
 
 // `dates` carry the dataset's UTC calendar date in their LOCAL fields (see
 // toDisplayDate in main.js), so the day has to be read off those. toISOString()
@@ -143,6 +151,11 @@ export function renderTimeseriesChart({
   wrapper.append(canvasBox, downloadButton);
   container.append(wrapper);
 
+  const axisText = token("--chart-text", "#b6c2d3");
+  const gridColor = token("--chart-grid", "rgba(148,163,184,0.14)");
+  const zeroLine = token("--chart-axis", "#64748b");
+  const titleText = token("--text", "#f8fafc");
+
   const datasets = [];
   if (hasBand) {
     // Band drawn as an upper series filled down to the lower series. Chart.js
@@ -193,18 +206,18 @@ export function renderTimeseriesChart({
         x: {
           type: "time",
           time: {unit: "year", tooltipFormat: "MMM yyyy"},
-          title: {display: true, text: "Time", color: "#333", font: {size: 12}},
-          ticks: {color: "#333", maxRotation: 0, autoSkip: true},
-          grid: {color: "rgba(0,0,0,0.06)"},
+          title: {display: true, text: "Time", color: axisText, font: {size: 12}},
+          ticks: {color: axisText, maxRotation: 0, autoSkip: true},
+          grid: {color: gridColor},
         },
         y: {
-          title: {display: true, text: `${valueLabel} (${units})`, color: "#333", font: {size: 12}},
-          ticks: {color: "#333"},
+          title: {display: true, text: `${valueLabel} (${units})`, color: axisText, font: {size: 12}},
+          ticks: {color: axisText},
           grid: {
             // Zero is the reference every anomaly is read against, so its
             // gridline is drawn as a solid black baseline rather than one more
             // faint tick line.
-            color: (ctx) => (ctx.tick?.value === 0 ? "#000" : "rgba(0,0,0,0.06)"),
+            color: (ctx) => (ctx.tick?.value === 0 ? zeroLine : gridColor),
             lineWidth: (ctx) => (ctx.tick?.value === 0 ? 2 : 1),
           },
         },
@@ -213,7 +226,7 @@ export function renderTimeseriesChart({
         title: {
           display: true,
           text: `${longName} Time Series${hasBand ? " and Uncertainty" : ""}`,
-          color: "#333",
+          color: titleText,
           font: {size: 14, weight: "bold"},
         },
         legend: {display: false},
