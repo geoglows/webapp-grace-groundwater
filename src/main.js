@@ -1155,7 +1155,7 @@ const resetLayers = () => {
   boundaryLayer.visible = true;
   boundaryLayer.definitionExpression = "1=1"; // reset to none selected
   arcgisMap.view.goTo(boundaryLayer.fullExtent);
-  timeControl?.stop();
+  timeControl?.hide();
   clearTimeseriesPanel(appInstructions);
   const possiblyExistingLayer = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
   if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);

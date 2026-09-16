@@ -118,6 +118,11 @@ export function createTimeControl({root, allDates, onStep}) {
       paint();
     },
     stop,
+    /** Put the bar away. There is nothing to animate without an analysis. */
+    hide() {
+      stop();
+      root.hidden = true;
+    },
     get currentDate() {
       return stops[position] ?? null;
     },
