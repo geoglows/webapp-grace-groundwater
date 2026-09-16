@@ -31,7 +31,7 @@
     <button id="refresh-layers" class="icon-btn tooltip" data-tooltip="Regional Map" aria-label="Regional Map" aria-pressed="false">
       <span data-icon="map" class="block size-6" aria-hidden="true"></span>
     </button>
-    <button id="upload-button" class="icon-btn tooltip" data-tooltip="Upload GeoJSON" aria-label="Upload GeoJSON">
+    <button id="upload-button" class="icon-btn tooltip" data-tooltip="Upload Region GeoJSON" aria-label="Upload Region GeoJSON">
       <span data-icon="arrow-up-tray" class="block size-6" aria-hidden="true"></span>
     </button>
     <button id="settings-button" class="icon-btn tooltip" data-tooltip="Settings" aria-label="Settings">
@@ -285,8 +285,8 @@
 
 <div id="upload-modal" class="fixed inset-0 z-1000 hidden overflow-y-auto bg-black/50">
   <div class="mx-auto my-[5vh] w-[85%] max-w-[500px] rounded-lg border border-neutral-500 bg-neutral-50 p-5">
-    <h2 class="text-2xl font-bold text-neutral-900">Upload Polygon</h2>
-    <p class="mb-3 text-[13px] text-neutral-600">Upload a GeoJSON file containing polygon geometries to analyze GRACE groundwater data within the polygon boundary.</p>
+    <h2 class="text-2xl font-bold text-neutral-900">Upload Region</h2>
+    <p class="mb-3 text-[13px] text-neutral-600">Upload a GeoJSON file containing polygon geometries to analyze GRACE groundwater data within the region boundary.</p>
     <hr class="my-4 border-t border-neutral-300"/>
     <div id="upload-drop-zone"
          class="my-4 cursor-pointer rounded-lg border-2 border-dashed border-neutral-300 px-5 py-10 text-center transition hover:border-sky-700 hover:bg-sky-50 data-[drag=true]:border-sky-700 data-[drag=true]:bg-sky-50">
