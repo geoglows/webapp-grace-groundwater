@@ -71,11 +71,19 @@ const arcgisMap = document.querySelector("arcgis-map");
 const BASEMAPS = [
   {id: "osm", label: "OpenStreetMap"},
   {id: "topo-vector", label: "Topographic (Esri)"},
-  {id: "satellite", label: "Imagery (Esri)"},
+  {id: "satellite", label: "Imagery (Esri)", dark: true},
   {id: "streets-vector", label: "Streets (Esri)"},
   {id: "gray-vector", label: "Light Gray (Esri)"},
   {id: "terrain", label: "Terrain (Esri)"},
 ];
+
+// Imagery is a dark, busy ground: the blue the outlines use over a pale basemap
+// disappears into it. Everything the app draws on the map picks its colors from
+// this rather than assuming a light background.
+const isDarkBasemap = (id) => BASEMAPS.find((b) => b.id === id)?.dark ?? false;
+// Tracked rather than read back from arcgisMap.basemap, which normalizes the id
+// it is assigned into a Basemap instance — there is no id left to compare.
+let darkBasemap = isDarkBasemap(MAP_BASEMAP);
 
 // Drawing is a SketchViewModel behind our own button rather than <arcgis-sketch>:
 // the widget's toolbar carried a selection arrow, five polygon drawing modes, an
@@ -361,28 +369,48 @@ const maskFill = (node, {data, shape, stride}) => {
 // reads as scribble (dense clusters like the US High Plains lose their
 // individual shapes entirely). The fill is what makes a region legible when its
 // outline is only a few pixels across.
-const regionSymbol = {
+// Amber over imagery rather than a brighter blue: satellite tiles are mostly
+// blues and greens, so a warm hue is the one that separates from them at any
+// zoom. It is the same hue aquiferx gives its aquifer outlines, for the same
+// reason. The outline also thickens slightly — imagery has texture to compete
+// with where a flat basemap does not.
+const regionSymbolFor = (dark) => ({
   type: "simple-fill",
-  color: [37, 99, 235, 0.12],
-  outline: {color: [30, 64, 175, 0.75], width: 1},
-};
+  color: dark ? [250, 204, 21, 0.10] : [37, 99, 235, 0.12],
+  outline: {
+    color: dark ? [250, 204, 21, 0.95] : [30, 64, 175, 0.75],
+    width: dark ? 1.25 : 1,
+  },
+});
 
 // Names are drawn by the layer rather than as separate graphics so the SDK's
 // label engine handles collisions. minScale is what keeps the map readable:
 // collision dropping alone still leaves continent zoom covered in names longer
 // than the regions under them, so nothing is labeled until the view is closer
 // in than regionLabelMinScale.
-const regionLabel = {
+// Over imagery the halo inverts: white text on a dark halo, which is how a
+// label stays readable when the ground underneath it changes from ocean to
+// cloud to desert within one name.
+const regionLabelFor = (dark) => ({
   labelExpressionInfo: {expression: "$feature.n"},
   labelPlacement: "always-horizontal",
   minScale: displayConfig.regionLabelMinScale,
   symbol: {
     type: "text",
-    color: [23, 37, 84, 1],
-    haloColor: [255, 255, 255, 0.95],
+    color: dark ? [255, 255, 255, 1] : [23, 37, 84, 1],
+    haloColor: dark ? [0, 0, 0, 0.85] : [255, 255, 255, 0.95],
     haloSize: 1.5,
     font: {size: 9, weight: "bold"},
   },
+});
+
+// Renderers are immutable once assigned, so a basemap change means handing each
+// layer a new one rather than editing what it has.
+const applyBasemapContrast = (basemapId) => {
+  darkBasemap = isDarkBasemap(basemapId);
+  boundaryLayer.renderer = {type: "simple", symbol: regionSymbolFor(darkBasemap)};
+  boundaryLayer.labelingInfo = [regionLabelFor(darkBasemap)];
+  masconLayer.renderer = masconRenderer();
 };
 
 const boundaryLayer = new GeoJSONLayer({
@@ -390,11 +418,11 @@ const boundaryLayer = new GeoJSONLayer({
   url: REGIONS_URL,
   outFields: ["*"],
   definitionExpression: "1=1", // start with none selected
-  renderer: {type: "simple", symbol: regionSymbol},
+  renderer: {type: "simple", symbol: regionSymbolFor(darkBasemap)},
   // Clicking a region analyzes it directly (see the view click handler in
   // init) — the popup this used to open only ever held one button.
   popupEnabled: false,
-  labelingInfo: [regionLabel],
+  labelingInfo: [regionLabelFor(darkBasemap)],
   labelsVisible: displayConfig.showRegionNames,
 });
 
@@ -502,7 +530,11 @@ const masconRenderer = () => ({
   symbol: {
     type: "simple-fill",
     color: [255, 255, 255, 0],
-    outline: {color: [38, 38, 38, 0.75], width: displayConfig.masconWidth}
+    // Near-black is invisible on imagery, so it inverts to near-white there.
+    outline: {
+      color: darkBasemap ? [235, 235, 235, 0.8] : [38, 38, 38, 0.75],
+      width: displayConfig.masconWidth,
+    },
   }
 });
 const masconLayer = new GeoJSONLayer({
@@ -1366,6 +1398,7 @@ const bootMapUi = async () => {
     button.dataset.basemap = id;
     button.addEventListener("click", () => {
       arcgisMap.basemap = id;
+      applyBasemapContrast(id);
       markCurrentBasemap(id);
       closeBasemapMenu();
     });
