@@ -47,7 +47,7 @@ const envList = (value, allowed, fallback) => {
 // about which variable is showing.
 export const VARIABLES = {
   GWSa: {short: "GWS", longName: "Groundwater Storage Anomaly", color: "#60a5fa"},
-  TWSa: {short: "TWS", longName: "Total Water Storage Anomaly", color: "#a78bfa"},
+  TWSa: {short: "TWS", longName: "Total Water Storage Anomaly", color: "#fb923c"},
   SMa: {short: "SM", longName: "Soil Moisture Anomaly", color: "#34d399"},
   SWEa: {short: "SWE", longName: "Snow Water Equivalent Anomaly", color: "#e2e8f0"},
 };
