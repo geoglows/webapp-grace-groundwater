@@ -124,3 +124,48 @@ export function regionMeanSeries({rings, extent, frames, nT, nLat, nLon, lat, lo
   }
   return series;
 }
+
+/**
+ * Least-squares slope for every cell of a whole-world frame series, in units
+ * per year. NaN where a cell has fewer than `minPoints` months with data, which
+ * is the ocean and the ice sheets as well as the genuinely sparse.
+ *
+ * Accumulated time-major, one whole frame at a time, rather than cell by cell.
+ * The frames are time-major, so a single cell's series is strided a whole frame
+ * apart — at 0.5 degree that is 864 KB between consecutive reads, so every read
+ * of a cell-major loop is a cache miss, 60 million of them. Streaming frames in
+ * order reads the buffer sequentially and pays instead for five accumulator
+ * arrays, which are small enough to stay resident.
+ */
+export function perCellSlopes({frames, nT, nLat, nLon, dates, minPoints = 24}) {
+  const frameSize = nLat * nLon;
+  const n = new Int32Array(frameSize);
+  const sumX = new Float64Array(frameSize);
+  const sumY = new Float64Array(frameSize);
+  const sumXY = new Float64Array(frameSize);
+  const sumX2 = new Float64Array(frameSize);
+
+  for (let t = 0; t < nT; t++) {
+    const x = dates[t].getTime() / MS_PER_YEAR;
+    const x2 = x * x;
+    const base = t * frameSize;
+    for (let c = 0; c < frameSize; c++) {
+      const y = frames[base + c];
+      if (!Number.isFinite(y)) continue;
+      n[c]++;
+      sumX[c] += x;
+      sumY[c] += y;
+      sumXY[c] += x * y;
+      sumX2[c] += x2;
+    }
+  }
+
+  const slopes = new Float32Array(frameSize).fill(NaN);
+  for (let c = 0; c < frameSize; c++) {
+    if (n[c] < minPoints) continue;
+    const denom = n[c] * sumX2[c] - sumX[c] * sumX[c];
+    if (denom === 0) continue;
+    slopes[c] = (n[c] * sumXY[c] - sumX[c] * sumY[c]) / denom;
+  }
+  return slopes;
+}

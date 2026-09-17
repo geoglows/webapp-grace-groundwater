@@ -27,13 +27,14 @@ import {hydrateIcons} from "./icons.js";
 import Polygon from "@arcgis/core/geometry/Polygon.js";
 import {parseGeoJSONFile} from "./polygonUploads.js";
 import {deleteUserRegion, listUserRegions, newUserRegionId, putUserRegion} from "./userRegions.js";
-import {INSUFFICIENT, TREND_CATEGORIES, classify, computeSlope, regionMeanSeries} from "./trends.js";
+import {INSUFFICIENT, TREND_CATEGORIES, classify, computeSlope, perCellSlopes, regionMeanSeries} from "./trends.js";
 import {createTimeControl} from "./timeControl.js";
 import {
   COLOR_PALETTES,
   DEFAULT_VIEW,
   DISPLAY_DEFAULTS,
   TREND_MIN_MONTHS,
+  TREND_SCALE_MAX,
   TREND_THRESHOLDS,
   GLOBAL_PLAY_RATE_MS,
   MAP_BASEMAP,
@@ -76,15 +77,25 @@ const plottedVariables = () => [
 ];
 
 // Generate color stops scaled to max value (dynamic or fixed based on toggle)
-const generateStops = () => {
+// Stops for a symmetric +/-maxVal range in `unit`. The palette is the same
+// either way; only the numbers on it change, which is what lets the trend map
+// reuse the anomaly color bar.
+const stopsFor = (maxVal, unit, {decimals = 0} = {}) => {
   const {stops} = COLOR_PALETTES[displayConfig.colorPalette];
-  const maxVal = displayConfig.dynamicColorScale ? displayConfig.maxValue : displayConfig.fixedMaxValue;
   return stops.map(({position, color}) => {
-    const value = Math.round(position * maxVal);
-    const label = value === 0 ? "0" : `${value} ${UNITS}`;
+    const value = Number((position * maxVal).toFixed(decimals));
+    const label = value === 0 ? "0" : `${value} ${unit}`;
     return {value, color, label};
   });
 };
+
+const generateStops = () => {
+  const maxVal = displayConfig.dynamicColorScale ? displayConfig.maxValue : displayConfig.fixedMaxValue;
+  return stopsFor(maxVal, UNITS);
+};
+
+// The trend map's own scale, in units per year rather than units.
+const trendStops = () => stopsFor(TREND_SCALE_MAX, `${UNITS}/yr`, {decimals: 1});
 
 // Map elements
 const arcgisMap = document.querySelector("arcgis-map");
@@ -516,6 +527,9 @@ const boundaryLayer = new GeoJSONLayer({
 const trendState = {
   on: false,
   running: false,
+  // "region" (outlines classified) or "global" (per-cell trend raster). The two
+  // belong to different views, so a view change clears whichever does not fit.
+  mode: null,
   // varName the showing classification was computed for, so switching the
   // displayed layer recomputes rather than mislabeling.
   varName: null,
@@ -603,12 +617,83 @@ const hexToRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)
 
 const setTrendsOff = () => {
   trendState.on = false;
+  trendState.mode = null;
   trendState.varName = null;
   trendState.byRegion.clear();
   boundaryLayer.renderer = {type: "simple", symbol: regionSymbolFor(darkBasemap)};
   trendLegendDiv.classList.add("hidden");
   trendsButton.setAttribute("aria-pressed", "false");
   trendsLabel.textContent = "Analyze trends";
+};
+
+// Trends belong to the view that produced them. Entering the global view drops
+// a region classification and leaving it drops the trend raster, so the button
+// never offers to hide something that is no longer on screen.
+const clearTrendsOnViewChange = (entering) => {
+  if (!trendState.on || trendState.mode === entering) return;
+  if (trendState.mode === "region") {
+    setTrendsOff(); // restores the outline symbol
+  } else {
+    // The global raster is being torn down by the caller; only the flags remain.
+    trendState.on = false;
+    trendState.mode = null;
+    trendState.varName = null;
+    trendsButton.setAttribute("aria-pressed", "false");
+    trendsLabel.textContent = "Analyze trends";
+  }
+};
+
+// The whole-world trend map: one slope per cell, drawn through the same raster
+// renderer the animation uses. Static by nature, so the animation control goes
+// away while it is showing — there are no frames to step through.
+const runGlobalTrends = async () => {
+  const varName = displayConfig.variable;
+  trendState.running = true;
+  trendsButton.disabled = true;
+  trendsLabel.textContent = "Analyzing…";
+  globalProgressLabel.textContent = `Fitting ${varName} trends\u2026`;
+  globalProgressFill.style.width = "100%";
+  globalProgressDiv.classList.remove("hidden");
+  try {
+    await ensureGlobalData(varName);
+    const {frames, nT, nLat, nLon} = globalView.byVar[varName].data;
+    // One frame of gradients out of 290 of anomalies.
+    const slopes = perCellSlopes({frames, nT, nLat, nLon, dates: timeDates, minPoints: TREND_MIN_MONTHS});
+    if (!globalView.active || displayConfig.variable !== varName) return;
+
+    const {latEdgeMin, cellSize} = globalView.geo[resolutionOf(varName)];
+    globalView.renderer.setStops(trendStops());
+    globalView.renderer.setGrid({frames: slopes, nT: 1, nLat, nLon, latEdgeMin, cellSize});
+    // Not this variable's animation grid any more, so re-entering the animation
+    // has to rebuild it rather than reuse what is on screen.
+    globalView.gridVar = null;
+    globalView.renderer.drawFrame(0);
+
+    timeStepHandler = null;
+    timeControl?.hide();
+    updateMapLegend({
+      stops: trendStops(),
+      unit: `${UNITS}/yr`,
+      title: `${VARIABLES[varName].longName} trend (${UNITS}/yr)`,
+    });
+    setLegendAvailable(true);
+    globalProgressDiv.classList.add("hidden");
+
+    trendState.on = true;
+    trendState.mode = "global";
+    trendState.varName = varName;
+    trendsButton.setAttribute("aria-pressed", "true");
+    trendsLabel.textContent = "Hide trends";
+  } catch (err) {
+    console.error("Could not fit the global trends", err);
+    globalProgressLabel.textContent = `Could not fit ${varName} trends — see the console.`;
+    globalProgressFill.style.width = "0%";
+    trendsLabel.textContent = "Analyze trends";
+    trendsButton.setAttribute("aria-pressed", "false");
+  } finally {
+    trendState.running = false;
+    trendsButton.disabled = false;
+  }
 };
 
 const runTrends = async () => {
@@ -638,6 +723,7 @@ const runTrends = async () => {
     }
 
     trendState.on = true;
+    trendState.mode = "region";
     trendState.varName = varName;
     applyTrendRenderer();
     renderTrendLegend(varName);
@@ -1027,15 +1113,14 @@ const updateGlobalProgress = (fraction) => {
 // Both views share this small color-ramp legend, built from the current stops.
 // (MediaLayer rasters never appeared in the ArcGIS legend widget, and that
 // widget has been removed, so this is the only legend in the app.)
-const updateMapLegend = () => {
-  const stops = generateStops();
+const updateMapLegend = ({stops = generateStops(), unit = UNITS, title} = {}) => {
   const min = stops[0].value;
   const max = stops[stops.length - 1].value;
   const gradient = stops.map((s) => `${s.color} ${(((s.value - min) / (max - min)) * 100).toFixed(1)}%`).join(", ");
-  mapLegendTitle.textContent = `${VARIABLES[displayConfig.variable].longName} (${UNITS})`;
+  mapLegendTitle.textContent = title ?? `${VARIABLES[displayConfig.variable].longName} (${unit})`;
   mapLegendBar.style.background = `linear-gradient(to right, ${gradient})`;
-  mapLegendMin.textContent = `${min} ${UNITS}`;
-  mapLegendMax.textContent = `${max} ${UNITS}`;
+  mapLegendMin.textContent = `${min} ${unit}`;
+  mapLegendMax.textContent = `${max} ${unit}`;
 };
 
 const setGlobalGrid = (varName) => {
@@ -1125,6 +1210,7 @@ const prefetchGlobalVariables = () => {
 const analyzeGlobalView = async ({keepView = false} = {}) => {
   setActiveRegion(null);
   setBreadcrumb("Global map", {home: false});
+  clearTrendsOnViewChange("global");
   const runId = ++globalView.runSeq;
   analysisRunSeq++; // abandon any in-flight regional analysis
   globalView.active = true;
@@ -1230,6 +1316,7 @@ const analyzeGlobalView = async ({keepView = false} = {}) => {
 };
 
 const exitGlobalView = () => {
+  clearTrendsOnViewChange("region");
   globalView.runSeq++;
   globalView.active = false;
   setActiveViewButton("regional");
@@ -1881,7 +1968,21 @@ const bootMapUi = async () => {
   // once. Pressing again restores the plain symbology.
   trendsButton.addEventListener("click", () => {
     if (trendState.running) return;
-    if (trendState.on) setTrendsOff();
+    if (trendState.on) {
+      // In the global view the trend map replaced the animation, so turning it
+      // off means putting the animation back rather than restoring a symbol.
+      if (globalView.active) {
+        trendState.on = false;
+        trendState.varName = null;
+        trendsButton.setAttribute("aria-pressed", "false");
+        trendsLabel.textContent = "Analyze trends";
+        analyzeGlobalView({keepView: true});
+      } else {
+        setTrendsOff();
+      }
+      return;
+    }
+    if (globalView.active) runGlobalTrends();
     else runTrends();
   });
 
@@ -1917,7 +2018,10 @@ const bootMapUi = async () => {
     syncSeriesToggles(); // the lock moves with the displayed layer
     // A classification belongs to one variable; keeping it under another
     // variable's name would be a lie, so it is recomputed.
-    if (trendState.on && trendState.varName !== displayConfig.variable) runTrends();
+    if (trendState.on && trendState.varName !== displayConfig.variable) {
+      if (trendState.mode === "global") runGlobalTrends();
+      else runTrends();
+    }
     if (globalView.active) analyzeGlobalView({keepView: true});
     else regionalVariableHandler?.();
     // neither view active (instructions showing): the next analysis picks it up
@@ -2016,11 +2120,20 @@ const bootMapUi = async () => {
   const updateAnomalyLayerAppearance = () => {
     // Global raster: restyle from the same stops, opacity, and cell boundaries
     if (globalView.active && globalView.byVar[displayConfig.variable]?.data) {
+      // The trend map is the same raster on a different scale, so a palette or
+      // opacity change restyles it without reverting it to anomalies.
+      const showingTrends = trendState.on && trendState.mode === "global";
       globalView.renderer.layer.opacity = displayConfig.opacity;
-      globalView.renderer.setStops(generateStops());
+      globalView.renderer.setStops(showingTrends ? trendStops() : generateStops());
       globalView.renderer.setBorders({show: displayConfig.showBorders, width: displayConfig.borderWidth});
       globalView.renderer.redraw();
-      updateMapLegend();
+      updateMapLegend(showingTrends
+        ? {
+          stops: trendStops(),
+          unit: `${UNITS}/yr`,
+          title: `${VARIABLES[displayConfig.variable].longName} trend (${UNITS}/yr)`,
+        }
+        : undefined);
       return; // no regional feature layer while the global view is active
     }
     const anomalyLayer = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
