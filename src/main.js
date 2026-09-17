@@ -866,14 +866,29 @@ const exitGlobalView = () => {
 
 const main = async ({polygon, zoomTarget}) => {
   exitGlobalView();
-  // The camera starts only once the chart panel exitGlobalView just revealed has
-  // taken its space. goTo resolves its target against the viewport it was handed,
-  // so shrinking the map mid-flight re-aims the animation and the map visibly
-  // jumps. A camera the user interrupts by panning is not a failed analysis, so
-  // a rejected goTo is swallowed rather than thrown out of the await below.
-  const zoomPromise = zoomTarget
-    ? afterLayout().then(() => arcgisMap.view.goTo(zoomTarget)).catch(() => {})
-    : Promise.resolve();
+
+  // The camera goes first, and everything below waits for it to have *started*.
+  //
+  // Two constraints pull against each other. It cannot start before the chart
+  // panel exitGlobalView just revealed has taken its space, because goTo
+  // resolves its target against the viewport it was handed and a mid-flight
+  // resize re-aims the animation. But the wait for that layout is two animation
+  // frames, and animation frames do not fire while the main thread is busy —
+  // so anything started before the wait pushes the camera out behind it. The
+  // reads below decompress zarr chunks synchronously (blosc/zstd through WASM),
+  // which is exactly that kind of busy, and is why the zoom used to sit still
+  // for a second or more after a click.
+  //
+  // Awaiting the layout here, before any of that work exists, keeps the wait to
+  // the two frames it is supposed to be.
+  let zoomPromise = Promise.resolve();
+  if (zoomTarget) {
+    await afterLayout();
+    // A camera the user interrupts by panning is not a failed analysis, so a
+    // rejected goTo is swallowed rather than thrown out of the await below.
+    zoomPromise = arcgisMap.view.goTo(zoomTarget).catch(() => {});
+  }
+
   // Remembered so a resolution switch can re-run this same region against the
   // other store; cleared by resetLayers, which throws the analysis away.
   lastAnalyzedPolygon = polygon;
