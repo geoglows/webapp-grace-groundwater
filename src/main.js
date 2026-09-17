@@ -168,7 +168,6 @@ const regionNamesToggle = document.getElementById("region-names-toggle");
 const masconToggle = document.getElementById("mascon-toggle");
 const masconWidthSlider = document.getElementById("mascon-width");
 const masconWidthValue = document.getElementById("mascon-width-value");
-const halfDegreeToggle = document.getElementById("half-degree-toggle");
 const opacitySlider = document.getElementById("opacity-slider");
 const opacityValue = document.getElementById("opacity-value");
 const paletteSelect = document.getElementById("palette-select");
@@ -234,7 +233,6 @@ const syncSettingsControls = () => {
   fillGapsToggle.checked = displayConfig.fillGaps;
   masconWidthSlider.value = String(displayConfig.masconWidth);
   masconWidthValue.textContent = `${displayConfig.masconWidth}px`;
-  halfDegreeToggle.checked = displayConfig.halfDegreeCells;
   dynamicScaleToggle.checked = displayConfig.dynamicColorScale;
   // The fixed range is configurable, so the sentence explaining it has to be too.
   dynamicScaleNote.textContent = `When enabled, the color scale fits the actual min/max values in the selected region, with 0 always shown as the center color. When disabled, uses a fixed range of -${displayConfig.fixedMaxValue} to +${displayConfig.fixedMaxValue} ${UNITS}.`;
@@ -269,9 +267,21 @@ const yieldToBrowser = () => new Promise((resolve) => setTimeout(resolve, 0));
 // a frame's worth of work the map visibly stops moving.
 const SLICE_MS = 12;
 
-const activeZarrUrl = () => (displayConfig.halfDegreeCells ? ZARR_URL_HALF_DEGREE : ZARR_URL);
+// Resolution is a property of the variable (see VARIABLES in settings.js), so
+// the store a read goes to follows from what is being read rather than from any
+// setting. Both stores carry the same 290 month time axis and their grids nest,
+// which is what lets one analysis mix them.
+const ZARR_URLS = {"1.0": ZARR_URL, "0.5": ZARR_URL_HALF_DEGREE};
+const RESOLUTIONS = Object.keys(ZARR_URLS);
+const resolutionOf = (varName) => VARIABLES[varName].resolution;
+const zarrUrlFor = (resolution) => ZARR_URLS[resolution];
+// The grid the map's raster is drawn on: whichever the displayed layer uses.
+const displayedResolution = () => resolutionOf(displayConfig.variable);
+// Both stores carry the same 290 month axis, so the time array is read from one
+// of them rather than once per grid.
+const TIME_RESOLUTION = "1.0";
 
-const openArray = (name) => openZarrArray(activeZarrUrl(), name);
+const openArray = (name, resolution) => openZarrArray(zarrUrlFor(resolution), name);
 
 // ---- Lazily-loaded shared inputs -------------------------------------------
 // NOTHING in this module may sit at the top level behind `await`. A module with
@@ -284,25 +294,25 @@ const openArray = (name) => openZarrArray(activeZarrUrl(), name);
 // Instead each shared input is a memoized promise that clears itself on
 // failure, so pressing the globe button retries it.
 
-let coordsPromise = null;
-const ensureCoords = () => {
-  coordsPromise ??= getOrFetchCoords({zarrUrl: activeZarrUrl()}).catch((err) => {
-    coordsPromise = null;
-    geoPromise = null;
+const coordsPromises = {};
+const ensureCoords = (resolution) => {
+  coordsPromises[resolution] ??= getOrFetchCoords({zarrUrl: zarrUrlFor(resolution)}).catch((err) => {
+    delete coordsPromises[resolution];
+    delete geoPromises[resolution];
     throw err;
   });
-  return coordsPromise;
+  return coordsPromises[resolution];
 };
 
 // Grid origin derived from the coordinate arrays; needed by the renderer to
 // georeference the raster and by the workers to pick preview time steps.
-let geoPromise = null;
-const ensureGeo = () => {
-  geoPromise ??= ensureCoords().then(({lat, lon}) => {
+const geoPromises = {};
+const ensureGeo = (resolution) => {
+  geoPromises[resolution] ??= ensureCoords(resolution).then(({lat, lon}) => {
     const cellSize = lat.data[1] - lat.data[0];
     return {cellSize, lat0: lat.data[0], lon0: lon.data[0], latEdgeMin: lat.data[0] - cellSize / 2};
   });
-  return geoPromise;
+  return geoPromises[resolution];
 };
 
 // The time array holds plain numbers; the CF `units` attribute on it is what
@@ -360,7 +370,7 @@ let timeDates = null;
 let timeDatesPromise = null;
 const ensureTimeDates = () => {
   timeDatesPromise ??= (async () => {
-    const timeNode = await openArray("time");
+    const timeNode = await openArray("time", TIME_RESOLUTION);
     const timeIntegers = await get(timeNode, [null]);
     const units = parseTimeUnits(timeNode.attrs?.units);
     if (!units) {
@@ -383,9 +393,10 @@ const ensureTimeDates = () => {
 // A missing <var>_unc array is tolerated (unc: null -> no uncertainty band).
 const varNodePromises = {};
 const getVarNodes = (varName) => {
+  const resolution = resolutionOf(varName);
   varNodePromises[varName] ??= Promise.all([
-    openArray(varName),
-    openArray(`${varName}_unc`).catch(() => null),
+    openArray(varName, resolution),
+    openArray(`${varName}_unc`, resolution).catch(() => null),
   ])
     .then(([value, unc]) => ({value, unc}))
     .catch((err) => {
@@ -691,7 +702,10 @@ const globalView = {
   // frame rather than the full time series and must be replaced before the
   // time slider can drive it.
   gridVar: null,
-  geo: null,       // {cellSize, lat0, lon0, latEdgeMin}, set once coords resolve
+  // resolution -> {cellSize, lat0, lon0, latEdgeMin}. Per grid, because TWSa is
+  // read at 0.5 degree and the rest at 1.0, and the raster is georeferenced from
+  // whichever the displayed variable belongs to.
+  geo: {},
   // per-variable loads: varName -> {dataPromise, data: {frames, nT, nLat, nLon},
   // stats: {validTimeIndices, suggestedMax}}; each variable is downloaded in its
   // own worker, independently of the others and of whichever one is displayed
@@ -767,7 +781,8 @@ const updateMapLegend = () => {
 
 const setGlobalGrid = (varName) => {
   const entry = globalView.byVar[varName];
-  const {latEdgeMin, cellSize} = globalView.geo;
+  // Georeferencing belongs to the grid the variable was read on, not to the app.
+  const {latEdgeMin, cellSize} = globalView.geo[resolutionOf(varName)];
   globalView.renderer.setGrid({...entry.data, latEdgeMin, cellSize});
   globalView.gridVar = varName;
 };
@@ -786,9 +801,10 @@ const drawGlobalPreview = (varName, zarrUrl, {frame, nLat, nLon}) => {
   // A worker started against the other resolution keeps running to finish its
   // cache entry, but its previews and progress belong to a store the map is no
   // longer showing.
-  if (zarrUrl !== activeZarrUrl()) return;
+  if (zarrUrl !== zarrUrlFor(resolutionOf(varName))) return;
   if (!globalView.active || displayConfig.variable !== varName || !globalView.renderer) return;
-  const {latEdgeMin, cellSize} = globalView.geo;
+  const {latEdgeMin, cellSize} = globalView.geo[resolutionOf(varName)] ?? {};
+  if (cellSize == null) return;
   globalView.renderer.setStops(generateStops());
   globalView.renderer.setGrid({frames: frame, nT: 1, nLat, nLon, latEdgeMin, cellSize});
   globalView.gridVar = null;
@@ -802,18 +818,20 @@ const drawGlobalPreview = (varName, zarrUrl, {frame, nLat, nLon}) => {
 const ensureGlobalData = (varName) => {
   const entry = (globalView.byVar[varName] ??= {});
   if (!entry.dataPromise) {
-    // Pinned for the life of this load: switching resolution clears byVar, so a
-    // worker that finishes afterwards writes into an entry nothing reads, and
-    // its progress and previews are filtered out by this URL.
-    const zarrUrl = activeZarrUrl();
+    // The store follows the variable, so each worker reads the grid that
+    // variable belongs on — TWSa at 0.5 degree, the rest at 1.0. geo is kept per
+    // grid for the same reason: it georeferences the raster, and the two grids
+    // have different cell sizes and origins.
+    const resolution = resolutionOf(varName);
+    const zarrUrl = zarrUrlFor(resolution);
     entry.dataPromise = (async () => {
-      globalView.geo = await ensureGeo();
+      const geo = await ensureGeo(resolution);
+      globalView.geo = {...globalView.geo, [resolution]: geo};
       const {frames, nT, nLat, nLon, fromCache, stats} = await loadGlobalVariable({
         varName,
         zarrUrl,
-        geo: globalView.geo,
+        geo,
         onProgress: (fraction) => {
-          if (zarrUrl !== activeZarrUrl()) return;
           if (!globalView.active || displayConfig.variable !== varName) return;
           updateGlobalProgress(fraction);
         },
@@ -893,11 +911,11 @@ const analyzeGlobalView = async ({keepView = false} = {}) => {
   } catch (err) {
     console.error(`Failed to load the global ${varName} dataset`, err);
     if (globalView.runSeq === runId && globalView.active) {
-      // A deployment that has not published a half degree store fails here and
-      // nowhere else, so the message names the setting that caused it.
-      globalProgressLabel.textContent = displayConfig.halfDegreeCells
-        ? `Failed to load ${VARIABLES[varName].longName} at half degree resolution. That dataset may not be published — turn off "half degree water balance cells" in settings, or choose another layer.`
-        : `Failed to load ${VARIABLES[varName].longName}. It may not be available yet — choose another layer or press the globe to retry.`;
+      // The store a variable is read from follows from the variable, so naming
+      // the grid says which one failed to publish.
+      globalProgressLabel.textContent =
+        `Failed to load ${VARIABLES[varName].longName} at ${resolutionOf(varName)} degree resolution. ` +
+        `That dataset may not be published — choose another layer, or press the globe to retry.`;
       globalProgressFill.style.width = "0%";
       // don't leave another variable's raster on screen looking like this one
       if (globalView.gridVar !== varName) {
@@ -1006,27 +1024,96 @@ const main = async ({polygon, zoomTarget}) => {
   regionalVariableHandler = null; // reinstalled once this run's data is ready
   regionalSeriesHandler = null;
   await ensureTimeDates();
-  const {lat, lon} = await ensureCoords();
   await arcgisMap.map.when();
   await arcgisMap.view.when();
-  const cellSize = lat.data[1] - lat.data[0]; // ~0.25
-  const HALF = cellSize / 2;
+  if (!geodeticAreaOperator.isLoaded()) await geodeticAreaOperator.load();
+  intersectionOperator.accelerateGeometry(polygon);
 
-  // ---- Identify cells in the bounding box of the polygon to read zarr values for and start the async reads which we can wait for later
-  const filteredLats = lat.data.filter((y) => y >= polygon.extent.ymin - 2 * cellSize && y <= polygon.extent.ymax + 2 * cellSize);
-  const filteredLons = lon.data.filter((x) => x >= polygon.extent.xmin - 2 * cellSize && x <= polygon.extent.xmax + 2 * cellSize);
-  const yStart = lat.data.indexOf(filteredLats[0]);
-  const yStop = lat.data.indexOf(filteredLats[filteredLats.length - 1]) + 1;
-  const xStart = lon.data.indexOf(filteredLons[0]);
-  const xStop = lon.data.indexOf(filteredLons[filteredLons.length - 1]) + 1;
-  // Reads are lazy per variable: the displayed one starts downloading now
-  // (overlapping the geometry work below); the others are fetched only when
-  // first selected, then memoized so toggling back is instant.
-  const readWindow = [null, {start: yStart, stop: yStop}, {start: xStart, stop: xStop}];
+  // Cells whose overlap with the region is below this are neither drawn nor
+  // averaged: a sliver of a cell is mostly somewhere else.
+  const displayThreshold = 0.35;
+
+  // Everything below is per grid, not per analysis. TWSa is read at 0.5 degree
+  // and every other variable at 1.0 (VARIABLES in settings.js), so a chart
+  // comparing them needs both, and nothing about one transfers to the other —
+  // different cell geometry, different read window, different overlap weights.
+  //
+  // Split in two because the halves cost very different amounts. The read
+  // window needs only the coordinate arrays, so the download can start while
+  // the expensive part runs; the cell intersection is thousands of WASM calls.
+
+  const windows = {};
+  const windowFor = (resolution) => {
+    windows[resolution] ??= ensureCoords(resolution).then(({lat, lon}) => {
+      const cellSize = lat.data[1] - lat.data[0];
+      const filteredLats = lat.data.filter((y) => y >= polygon.extent.ymin - 2 * cellSize && y <= polygon.extent.ymax + 2 * cellSize);
+      const filteredLons = lon.data.filter((x) => x >= polygon.extent.xmin - 2 * cellSize && x <= polygon.extent.xmax + 2 * cellSize);
+      const yStart = lat.data.indexOf(filteredLats[0]);
+      const yStop = lat.data.indexOf(filteredLats[filteredLats.length - 1]) + 1;
+      const xStart = lon.data.indexOf(filteredLons[0]);
+      const xStop = lon.data.indexOf(filteredLons[filteredLons.length - 1]) + 1;
+      return {
+        cellSize,
+        filteredLats,
+        filteredLons,
+        readWindow: [null, {start: yStart, stop: yStop}, {start: xStart, stop: xStop}],
+      };
+    });
+    return windows[resolution];
+  };
+
+  // Null when a newer analysis took over while this was building: the loop
+  // yields, so that can happen part way through. Every caller checks.
+  const grids = {};
+  const gridFor = async (resolution) => {
+    if (grids[resolution]) return grids[resolution];
+    const {cellSize, filteredLats, filteredLons, readWindow} = await windowFor(resolution);
+    if (runId !== analysisRunSeq) return null;
+    const HALF = cellSize / 2;
+
+    // Three or four WASM geometry calls per cell, over every cell in the
+    // region's bounding box — a second or more of uninterrupted synchronous
+    // work on a large region. That is what froze the map mid-zoom: the camera
+    // was animating, but no frame could be painted until the loop finished, so
+    // the view sat still and then snapped to its destination.
+    //
+    // Slicing by elapsed time rather than by a cell count keeps the pause
+    // bounded whatever the cell size and however fast the machine is. The check
+    // sits in the outer loop so it stays off the hot path.
+    const intersectingCells = [];
+    let sliceStart = performance.now();
+    for (const y of filteredLats) {
+      for (const x of filteredLons) {
+        const cell = cellPolygonFromCenter({xCenter: x, yCenter: y, halfWidth: HALF});
+        const cellArea = geodeticAreaOperator.execute(cell);
+        const intersectsGeom = intersectionOperator.execute(polygon, cell);
+        const intersectArea = intersectsGeom ? geodeticAreaOperator.execute(intersectsGeom) : 0;
+        const frac = intersectArea / cellArea;
+        intersectingCells.push({lon: x, lat: y, frac, cell, intersects: !!intersectsGeom, overlapArea: intersectArea});
+      }
+      if (performance.now() - sliceStart > SLICE_MS) {
+        await yieldToBrowser();
+        if (runId !== analysisRunSeq) return null;
+        sliceStart = performance.now();
+      }
+    }
+
+    const validCellIndices = intersectingCells
+      .map((cell, idx) => (cell.intersects && cell.frac >= displayThreshold) ? idx : -1)
+      .filter((idx) => idx !== -1);
+
+    grids[resolution] = {resolution, cellSize, intersectingCells, validCellIndices};
+    return grids[resolution];
+  };
+
+  // Reads are lazy per variable: the displayed one starts downloading now, over
+  // the top of the cell intersection below, and the others are fetched only
+  // when first selected, then memoized so toggling back is instant. The window
+  // comes from that variable's own grid.
   const varReads = {};
   const startVarRead = (varName) => {
-    varReads[varName] ??= getVarNodes(varName)
-      .then((nodes) => Promise.all([
+    varReads[varName] ??= Promise.all([windowFor(resolutionOf(varName)), getVarNodes(varName)])
+      .then(([{readWindow}, nodes]) => Promise.all([
         get(nodes.value, readWindow).then((raw) => maskFill(nodes.value, raw)), // int16 sentinel -> NaN
         nodes.unc ? get(nodes.unc, readWindow) : null,                          // float, already NaN-filled
       ]))
@@ -1036,45 +1123,7 @@ const main = async ({polygon, zoomTarget}) => {
       });
     return varReads[varName];
   };
-  startVarRead(displayConfig.variable);
-
-  // ---- Find the overlapping areas of the cells with the polygon ----
-  if (!geodeticAreaOperator.isLoaded()) await geodeticAreaOperator.load();
-  intersectionOperator.accelerateGeometry(polygon);
-  // Three or four WASM geometry calls per cell, over every cell in the region's
-  // bounding box — a second or more of uninterrupted synchronous work on a large
-  // region. That is what froze the map mid-zoom: the camera was animating, but
-  // no frame could be painted until the loop finished, so the view sat still and
-  // then snapped to its destination.
-  //
-  // Slicing by elapsed time rather than by a cell count keeps the pause bounded
-  // whatever the cell size and however fast the machine is. The check sits in
-  // the outer loop so it stays off the hot path.
-  const intersectingCells = [];
-  let sliceStart = performance.now();
-  for (const y of filteredLats) {
-    for (const x of filteredLons) {
-      const cell = cellPolygonFromCenter({xCenter: x, yCenter: y, halfWidth: HALF});
-      const cellArea = geodeticAreaOperator.execute(cell);
-      const intersectsGeom = intersectionOperator.execute(polygon, cell);
-      const intersectArea = intersectsGeom ? geodeticAreaOperator.execute(intersectsGeom) : 0;
-      const frac = intersectArea / cellArea;
-      intersectingCells.push({lon: x, lat: y, frac, cell, intersects: !!intersectsGeom, overlapArea: intersectArea});
-    }
-    if (performance.now() - sliceStart > SLICE_MS) {
-      await yieldToBrowser();
-      // Yielding is what makes a newer analysis able to start mid-loop, so this
-      // run has to check whether it is still the current one.
-      if (runId !== analysisRunSeq) return;
-      sliceStart = performance.now();
-    }
-  }
-
-  // Get indices of cells that pass the display threshold (frac >= 0.35)
-  const displayThreshold = 0.35;
-  const validCellIndices = intersectingCells
-    .map((cell, idx) => (cell.intersects && cell.frac >= displayThreshold) ? idx : -1)
-    .filter(idx => idx !== -1);
+  startVarRead(displayConfig.variable).catch(() => {}); // rethrown where it is awaited
 
   // Calculate max absolute value only for displayed cells
   const findMaxAbsForValidCells = (data, shape, stride, validIndices) => {
@@ -1115,8 +1164,12 @@ const main = async ({polygon, zoomTarget}) => {
   };
   // ---- Per-variable derived data, computed once that variable's read resolves
   const varData = {};
+  // Null when a newer analysis took over while this was loading.
   const loadVarData = async (varName) => {
     if (varData[varName]) return varData[varName];
+    const grid = await gridFor(resolutionOf(varName));
+    if (!grid) return null;
+    const {intersectingCells, validCellIndices} = grid;
     const [values, unc] = await startVarRead(varName);
     const meanSeries = weightedMeanTimeSeries(values.data, values.shape, values.stride, intersectingCells, validCellIndices);
     // Time steps where the selection actually has data. GRACE has missing months
@@ -1138,10 +1191,8 @@ const main = async ({polygon, zoomTarget}) => {
       // regions fit inside a single mascon and the median spans 0.6 of one.
       //
       // Treating cells as independent instead (quadrature, shrinking as 1/sqrt n)
-      // was considered and rejected. It would be wrong within a mascon, and the
-      // tell is that the band would narrow when the half-degree setting is
-      // switched on — same region, same science, tighter error bars purely
-      // because the raster got finer.
+      // was considered and rejected: it would be wrong within a mascon, where
+      // the cells carry one estimate copied.
       //
       // Doing it properly (correlated within a mascon, independent across) needs
       // a mascon id per cell, and measuring it first showed it is not worth the
@@ -1174,6 +1225,9 @@ const main = async ({polygon, zoomTarget}) => {
       // variable in the store, not a failed fetch. renderVariable says so rather
       // than drawing an empty chart over uncolored cells.
       hasData: validTimeIndices.length > 0,
+      // The raster indexes `values` by position in this grid's window, so the
+      // two travel together.
+      grid,
     };
     return varData[varName];
   };
@@ -1229,24 +1283,6 @@ const main = async ({polygon, zoomTarget}) => {
     activeChart.setMarker(timeControl?.currentDate ?? null);
   };
 
-  // ---- Create the cell source; `anomaly` carries whichever variable is displayed ----
-  const cellSource = intersectingCells
-    .map(({lon, lat, frac, cell, intersects}, idx) => {
-      if (!intersects || frac < displayThreshold) return null;
-      return new Graphic({
-        geometry: cell,
-        attributes: {
-          oid: idx,
-          idx,
-          lon,
-          lat,
-          frac,
-          anomaly: 0
-        }
-      });
-    })
-    .filter(Boolean);
-
   const cellFields = [
     {name: "oid", type: "oid"},
     {name: "idx", type: "integer"},
@@ -1281,53 +1317,83 @@ const main = async ({polygon, zoomTarget}) => {
     };
   };
 
-  const anomalyLayer = new FeatureLayer({
-    title: "GRACE Anomalies",
-    source: cellSource,
-    objectIdField: "oid",
-    fields: cellFields,
-    geometryType: "polygon",
-    spatialReference: SpatialReference.WGS84,
-    renderer: createRenderer("anomaly"),
-    opacity: displayConfig.opacity,
-    visible: true
-  });
+  // The raster is drawn on the displayed layer's grid, so switching to a layer
+  // on the other grid rebuilds it — the cells are a different size and there are
+  // four times as many of them. Only TWSa sits at 0.5 degree, so that is the one
+  // switch that pays for a rebuild; moving between the 1.0 degree variables
+  // reuses what is already there.
+  let raster = null;
+  const buildRaster = (grid) => {
+    const cellSource = grid.intersectingCells
+      .map(({lon, lat, frac, cell, intersects}, idx) => {
+        if (!intersects || frac < displayThreshold) return null;
+        return new Graphic({
+          geometry: cell,
+          attributes: {oid: idx, idx, lon, lat, frac, anomaly: 0},
+        });
+      })
+      .filter(Boolean);
 
-  // Remove existing anomaly layer if present and add new one
-  const possiblyExistingLayer = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
-  if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);
-  await zoomPromise;
-  if (runId !== analysisRunSeq) return; // a newer analysis or reset took over
-  arcgisMap.map.layers.add(anomalyLayer, 0);
+    const layer = new FeatureLayer({
+      title: "GRACE Anomalies",
+      source: cellSource,
+      objectIdField: "oid",
+      fields: cellFields,
+      geometryType: "polygon",
+      spatialReference: SpatialReference.WGS84,
+      renderer: createRenderer("anomaly"),
+      opacity: displayConfig.opacity,
+      visible: true
+    });
 
-  // ---- precompute lookup from feature idx -> oid ----
-  const oids = cellSource.map(g => g.attributes.oid);
-  const idxs = cellSource.map(g => g.attributes.idx);
+    const existing = arcgisMap.map.layers.find((l) => l.title === "GRACE Anomalies");
+    if (existing) arcgisMap.map.layers.remove(existing);
+    arcgisMap.map.layers.add(layer, 0);
+
+    return {
+      resolution: grid.resolution,
+      layer,
+      // idx -> oid lookup, precomputed for the per-step edits below
+      oids: cellSource.map((g) => g.attributes.oid),
+      idxs: cellSource.map((g) => g.attributes.idx),
+      count: cellSource.length,
+    };
+  };
+
+  const ensureRaster = (grid) => {
+    if (raster?.resolution !== grid.resolution) raster = buildRaster(grid);
+    return raster;
+  };
 
   // ---- make updates serial so slider scrubbing doesn't overlap edits ----
   let editsInFlight = Promise.resolve();
 
   const updateMapToTimeStep = (timeStep) => {
     editsInFlight = editsInFlight.then(async () => {
-      const {values} = varData[displayConfig.variable] ?? {};
-      if (!values) return; // displayed variable failed to load
+      const d = varData[displayConfig.variable];
+      if (!d?.values) return; // displayed variable failed to load
+      // The indices below address this variable's own window, so a raster built
+      // for the other grid cannot be edited from it. renderVariable installs the
+      // right one; this is the guard for an edit already queued when it changed.
+      if (raster?.resolution !== d.grid.resolution) return;
+      const {values} = d;
       const nLon = values.shape[2];
       const nLat = values.shape[1];
       const base = timeStep * nLat * nLon;
 
       // Build update array with the displayed variable's value for each cell
-      const updateFeatures = new Array(cellSource.length);
-      for (let i = 0; i < cellSource.length; i++) {
-        const idx = idxs[i];
+      const updateFeatures = new Array(raster.count);
+      for (let i = 0; i < raster.count; i++) {
+        const idx = raster.idxs[i];
         updateFeatures[i] = new Graphic({
           attributes: {
-            oid: oids[i],
+            oid: raster.oids[i],
             anomaly: values.data[base + idx]
           }
         });
       }
 
-      await anomalyLayer.applyEdits({updateFeatures});
+      await raster.layer.applyEdits({updateFeatures});
 
       activeChart?.setMarker(timeDates[timeStep]);
     }).catch(console.error);
@@ -1352,24 +1418,27 @@ const main = async ({polygon, zoomTarget}) => {
     } catch (err) {
       console.error(`Failed to load ${varName} for this region`, err);
       if (runId !== analysisRunSeq || displayConfig.variable !== varName) return;
-      anomalyLayer.visible = false;
+      if (raster) raster.layer.visible = false;
       setLegendAvailable(false);
       showVariableUnavailable(varName);
       return;
     }
-    if (runId !== analysisRunSeq || displayConfig.variable !== varName) return; // stale toggle or analysis
+    // d is null when a newer analysis took over while the grid was building.
+    if (!d || runId !== analysisRunSeq || displayConfig.variable !== varName) return;
     // Read fine, but the variable is empty in this store (see hasData). Drawing
     // uncolored cells under a pointless chart would look like a broken render.
     if (!d.hasData) {
       console.warn(`${varName} read successfully for this region but contains no data — every value is a fill value`);
-      anomalyLayer.visible = false;
+      if (raster) raster.layer.visible = false;
       setLegendAvailable(false);
       clearTimeseriesPanel(`<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-[var(--text-faint)]">${VARIABLES[varName].longName} (${varName}) has no data in this dataset &mdash; choose another layer.</div>`);
       return;
     }
     displayConfig.maxValue = d.maxValue;
-    anomalyLayer.renderer = createRenderer("anomaly");
-    anomalyLayer.visible = true;
+    // Installs a new raster when this variable sits on the other grid.
+    ensureRaster(d.grid);
+    raster.layer.renderer = createRenderer("anomaly");
+    raster.layer.visible = true;
     updateMapLegend();
     setLegendAvailable(true);
     plotTimeseries();
@@ -1382,7 +1451,10 @@ const main = async ({polygon, zoomTarget}) => {
   regionalVariableHandler = () => renderVariable({keepSlider: true});
   regionalSeriesHandler = () => plotTimeseries();
 
-  // initial draw
+  // initial draw. The camera is awaited here rather than around the raster's
+  // creation, which is now deferred into renderVariable.
+  await zoomPromise;
+  if (runId !== analysisRunSeq) return; // a newer analysis or reset took over
   await renderVariable({keepSlider: false});
 }
 
@@ -1403,38 +1475,6 @@ const resetLayers = () => {
   const possiblyExistingLayer = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
   if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);
 }
-
-// Switch between the 1.0 and 0.5 degree stores. Every memoized read in this
-// module belongs to the store it came from — the coordinate arrays, the time
-// axis, the opened variable nodes, and each variable's whole-world frames — so
-// all of them are dropped together and whichever view is showing reloads itself.
-// Nothing is deleted from IndexedDB: its keys already carry the store URL, so a
-// switch back to a resolution that was loaded once is served from the cache.
-const setHalfDegreeCells = (enabled) => {
-  if (displayConfig.halfDegreeCells === enabled) return;
-  displayConfig.halfDegreeCells = enabled;
-
-  coordsPromise = null;
-  geoPromise = null;
-  timeDates = null;
-  timeDatesPromise = null;
-  for (const varName of Object.keys(varNodePromises)) delete varNodePromises[varName];
-  globalView.byVar = {};
-  globalView.gridVar = null;
-  globalView.geo = null;
-  globalView.renderer?.clear();
-
-  prefetchGlobalVariables();
-
-  if (globalView.active) {
-    analyzeGlobalView({keepView: true});
-  } else if (lastAnalyzedPolygon) {
-    // Same region, other store. The camera is already there, hence no zoom.
-    main({polygon: lastAnalyzedPolygon, zoomTarget: null})
-      .catch((err) => console.error("Failed to re-run the analysis at the new resolution", err));
-  }
-  // Neither view showing (the instructions panel): the next analysis picks it up.
-};
 
 // Build a custom set of zoom levels (LODs) at half-step increments. The default
 // Web Mercator scheme halves the scale every level, so the jump from the most
@@ -1792,12 +1832,6 @@ const bootMapUi = async () => {
     displayConfig.masconWidth = parseFloat(e.target.value);
     masconWidthValue.textContent = `${displayConfig.masconWidth}px`;
     masconLayer.renderer = masconRenderer();
-  });
-
-  // Half degree cells. Reloads from the other store, so it is the one setting
-  // here that costs a download rather than a restyle.
-  halfDegreeToggle.addEventListener("change", (e) => {
-    setHalfDegreeCells(e.target.checked);
   });
 
   // ---- Upload modal ----

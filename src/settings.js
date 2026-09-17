@@ -48,11 +48,26 @@ const envList = (value, allowed, fallback) => {
 // The key is the label: it is what the store calls the array, what the layer
 // dropdown shows in parentheses, and what a CSV column is headed, so the panel
 // and the legend say the same thing as everything else.
+// `resolution` is the grid each variable is read on, and it is a property of the
+// science rather than a user preference.
+//
+// TWSa is GRACE, distributed on a 0.5 degree grid, so that is where it is read.
+// Serving it at 1.0 degree averages across mascon edges — the 3 degree caps are
+// aligned to half-degree lines, so a 1.0 degree cell straddles two of them — and
+// produces intermediate values that are in no GRACE solution.
+//
+// Everything else is the GLDAS three-model mean, and JPL protocol is to bring
+// the models together on the coarsest of them: NOAH (0.25 degree) is averaged up
+// to VIC and CLSM's 1.0 degree, not the other way round. The half-degree store
+// builds these by downscaling VIC and CLSM instead, which manufactures detail
+// those models never had, so they are never read from it. GWSa is
+// TWSa - SWEa - CANa - SMa and can be no finer than its components.
 export const VARIABLES = {
-  GWSa: {longName: "Groundwater Storage Anomaly", color: "#60a5fa"},
-  TWSa: {longName: "Total Water Storage Anomaly", color: "#fb923c"},
-  SMa: {longName: "Soil Moisture Anomaly", color: "#34d399"},
-  SWEa: {longName: "Snow Water Equivalent Anomaly", color: "#e2e8f0"},
+  GWSa: {longName: "Groundwater Storage Anomaly", color: "#60a5fa", resolution: "1.0"},
+  TWSa: {longName: "Total Water Storage Anomaly", color: "#fb923c", resolution: "0.5"},
+  SMa: {longName: "Soil Moisture Anomaly", color: "#34d399", resolution: "1.0"},
+  SWEa: {longName: "Snow Water Equivalent Anomaly", color: "#e2e8f0", resolution: "1.0"},
+  CANa: {longName: "Canopy Water Storage Anomaly", color: "#c084fc", resolution: "1.0"},
 };
 const VARIABLE_KEYS = Object.keys(VARIABLES);
 
@@ -177,7 +192,6 @@ export const DISPLAY_DEFAULTS = {
   // aid, not data, and turning it on is what pays for the GeoJSON download.
   showMascons: envBool(import.meta.env.VITE_SETTINGS_SHOW_MASCONS, false),
   masconWidth: envNumber(import.meta.env.VITE_SETTINGS_MASCON_WIDTH, 0.75, {min: 0.5, max: 3}),
-  halfDegreeCells: envBool(import.meta.env.VITE_SETTINGS_HALF_DEGREE_CELLS, false),
   dynamicColorScale: envBool(import.meta.env.VITE_SETTINGS_DYNAMIC_COLOR_SCALE, true),
   fixedMaxValue: envNumber(import.meta.env.VITE_SETTINGS_FIXED_COLOR_SCALE_MAX, 30, {min: 1}),
   maxValue: envNumber(import.meta.env.VITE_SETTINGS_FIXED_COLOR_SCALE_MAX, 30, {min: 1}),
