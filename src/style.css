@@ -734,9 +734,77 @@ body.panel-resizing * {
     color: #f87171;
 }
 
-/* A full-width action under the 2x2 grid: a computation rather than a
-   navigation, and a fifth cell in the grid would sit alone on its row. */
-.rfs-btn-wide {
-    width: 100%;
-    margin-bottom: 16px;
+/* ── Breadcrumb strip actions ───────────────────────────────────────────────
+   Pushed to the right of the trail. Trends act on whatever the trail names, so
+   they belong beside it rather than in the panel of display settings. */
+.rfs-crumbs-actions {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 10px;
+    margin-left: auto;
+}
+
+.rfs-crumbs-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    cursor: pointer;
+    transition: 0.12s;
+}
+
+.rfs-crumbs-btn:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.rfs-crumbs-btn[aria-pressed="true"] {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--on-accent);
+}
+
+.rfs-crumbs-btn:disabled {
+    cursor: default;
+    opacity: 0.6;
+}
+
+.rfs-crumbs-btn [data-icon] {
+    display: block;
+    height: 14px;
+    width: 14px;
+    flex-shrink: 0;
+}
+
+/* Only meaningful while trends are showing, so it is hidden the rest of the
+   time rather than disabled. */
+.rfs-crumbs-field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-faint);
+}
+
+.rfs-crumbs-field.hidden {
+    display: none;
+}
+
+.rfs-crumbs-select {
+    padding: 4px 6px;
+    font: inherit;
+    font-size: 12px;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    cursor: pointer;
 }

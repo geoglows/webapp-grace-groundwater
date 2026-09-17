@@ -220,6 +220,8 @@ const dynamicScaleNote = document.getElementById("dynamic-scale-note");
 const legendToggle = document.getElementById("legend-toggle");
 const seriesToggles = document.getElementById("series-toggles");
 const trendsButton = document.getElementById("trends-button");
+const trendWindowField = document.getElementById("trend-window");
+const trendWindowSelect = document.getElementById("trend-window-select");
 const trendsLabel = document.querySelector("[data-trends-label]");
 const trendLegendDiv = document.getElementById("trend-legend");
 const trendLegendTitle = document.getElementById("trend-legend-title");
@@ -558,6 +560,10 @@ const trendState = {
   // varName the showing classification was computed for, so switching the
   // displayed layer recomputes rather than mislabeling.
   varName: null,
+  // Years back from the newest month, or null for the whole record. A shorter
+  // window answers a different question — what storage has been doing lately,
+  // rather than over the mission — and the two can disagree in sign.
+  years: null,
   byRegion: new Map(), // region id -> category
 };
 
@@ -586,6 +592,32 @@ const ensureRegionRings = () => {
   return regionRingsPromise;
 };
 
+// The window offered in the strip. The record starts in 2002-04, so "All" is
+// around 24 years and the shorter options are the ones that fit inside it.
+const TREND_WINDOWS = [5, 10, 15, 20];
+
+// Set in bootMapUi: fills the window dropdown, which cannot be built until the
+// time axis is known. Held as a hook because the dropdown lives with the other
+// UI wiring and the fits below are module scope.
+let onTrendWindowsReady = () => {};
+
+// First month index inside the trend window, and how it is described. Measured
+// back from the newest month with data rather than from today, so the label
+// still matches the data after a gap at the end of the record.
+const trendWindow = () => {
+  const last = timeDates[timeDates.length - 1];
+  if (!trendState.years) {
+    return {from: 0, label: `${timeDates[0].getFullYear()}\u2013${last.getFullYear()}`};
+  }
+  const cutoff = new Date(last);
+  cutoff.setFullYear(cutoff.getFullYear() - trendState.years);
+  const from = timeDates.findIndex((d) => d >= cutoff);
+  return {
+    from: from < 0 ? 0 : from,
+    label: `last ${trendState.years} yr`,
+  };
+};
+
 // How many cells fell in each class. Land only: a NaN slope is ocean or a cell
 // with too few months, and neither is a classification.
 const countCellCategories = (slopes) => {
@@ -601,10 +633,10 @@ const countCellCategories = (slopes) => {
 
 // Shared by both modes: the region classification counts regions, the global
 // map counts cells, and the classes are the same either way.
-const renderTrendLegend = ({varName, counts, noun}) => {
+const renderTrendLegend = ({varName, counts, noun, window}) => {
   const {moderate, extreme} = TREND_THRESHOLDS;
   trendLegendTitle.textContent = `${varName} trend (${UNITS}/yr)`;
-  trendLegendSub.textContent = `${noun} · thresholds ±${moderate} and ±${extreme}`;
+  trendLegendSub.textContent = `${window} · ${noun} · ±${moderate} and ±${extreme}`;
 
   // Increase at the top, decline at the bottom: the legend reads the way the
   // values do.
@@ -659,6 +691,7 @@ const setTrendsOff = () => {
   trendState.byRegion.clear();
   boundaryLayer.renderer = {type: "simple", symbol: regionSymbolFor(darkBasemap)};
   trendLegendDiv.classList.add("hidden");
+  trendWindowField.classList.add("hidden");
   trendsButton.setAttribute("aria-pressed", "false");
   trendsLabel.textContent = "Analyze trends";
 };
@@ -677,6 +710,7 @@ const clearTrendsOnViewChange = (entering) => {
     trendState.varName = null;
     trendsButton.setAttribute("aria-pressed", "false");
     trendsLabel.textContent = "Analyze trends";
+    trendWindowField.classList.add("hidden");
   }
 };
 
@@ -692,10 +726,13 @@ const runGlobalTrends = async () => {
   globalProgressFill.style.width = "100%";
   globalProgressDiv.classList.remove("hidden");
   try {
+    await ensureTimeDates();
+    onTrendWindowsReady();
     await ensureGlobalData(varName);
     const {frames, nT, nLat, nLon} = globalView.byVar[varName].data;
     // One frame of gradients out of 290 of anomalies.
-    const slopes = perCellSlopes({frames, nT, nLat, nLon, dates: timeDates, minPoints: TREND_MIN_MONTHS});
+    const {from, label} = trendWindow();
+    const slopes = perCellSlopes({frames, nT, nLat, nLon, dates: timeDates, minPoints: TREND_MIN_MONTHS, from});
     if (!globalView.active || displayConfig.variable !== varName) return;
 
     const {latEdgeMin, cellSize} = globalView.geo[resolutionOf(varName)];
@@ -713,8 +750,9 @@ const runGlobalTrends = async () => {
     setLegendAvailable(false);
     const counts = countCellCategories(slopes);
     const classified = [...counts.values()].reduce((a, b) => a + b, 0);
-    renderTrendLegend({varName, counts, noun: `${classified.toLocaleString()} cells`});
+    renderTrendLegend({varName, counts, noun: `${classified.toLocaleString()} cells`, window: label});
     trendLegendDiv.classList.remove("hidden");
+    trendWindowField.classList.remove("hidden");
     globalProgressDiv.classList.add("hidden");
 
     trendState.on = true;
@@ -740,6 +778,8 @@ const runTrends = async () => {
   trendsButton.disabled = true;
   trendsLabel.textContent = "Analyzing…";
   try {
+    await ensureTimeDates();
+    onTrendWindowsReady();
     // The same frames and the same worker the global view uses, so a variable
     // already loaded there costs nothing here.
     const [regions, {frames, nT, nLat, nLon}, {lat, lon}] = await Promise.all([
@@ -748,6 +788,7 @@ const runTrends = async () => {
       ensureCoords(resolutionOf(varName)),
     ]);
 
+    const {from, label} = trendWindow();
     trendState.byRegion.clear();
     for (const region of regions) {
       const series = regionMeanSeries({
@@ -756,7 +797,7 @@ const runTrends = async () => {
         frames, nT, nLat, nLon,
         lat: lat.data, lon: lon.data,
       });
-      const slope = series ? computeSlope(timeDates, series, {minPoints: TREND_MIN_MONTHS}) : null;
+      const slope = series ? computeSlope(timeDates, series, {minPoints: TREND_MIN_MONTHS, from}) : null;
       trendState.byRegion.set(region.id, classify(slope, TREND_THRESHOLDS));
     }
 
@@ -766,8 +807,9 @@ const runTrends = async () => {
     applyTrendRenderer();
     const counts = new Map();
     for (const cat of trendState.byRegion.values()) counts.set(cat.key, (counts.get(cat.key) ?? 0) + 1);
-    renderTrendLegend({varName, counts, noun: `${trendState.byRegion.size} regions`});
+    renderTrendLegend({varName, counts, noun: `${trendState.byRegion.size} regions`, window: label});
     trendLegendDiv.classList.remove("hidden");
+    trendWindowField.classList.remove("hidden");
     trendsButton.setAttribute("aria-pressed", "true");
     trendsLabel.textContent = "Hide trends";
   } catch (err) {
@@ -2006,6 +2048,38 @@ const bootMapUi = async () => {
 
   // Trends replace the region outlines' fill, so the two cannot be shown at
   // once. Pressing again restores the plain symbology.
+  // Options are built once the time axis is known, so "All" can name the real
+  // first and last year rather than a guess.
+  const fillTrendWindows = () => {
+    if (!timeDates?.length) return;
+    const span = timeDates[timeDates.length - 1].getFullYear() - timeDates[0].getFullYear();
+    const options = [
+      {value: "", label: `All (${timeDates[0].getFullYear()}\u2013${timeDates[timeDates.length - 1].getFullYear()})`},
+      // Only the windows that fit inside the record; a 20 year option on 12
+      // years of data would silently mean the same as All.
+      ...TREND_WINDOWS.filter((y) => y < span).reverse().map((y) => ({value: String(y), label: `Last ${y} years`})),
+    ];
+    trendWindowSelect.replaceChildren(
+      ...options.map(({value, label}) => {
+        const option = document.createElement("option");
+        option.value = value;
+        option.textContent = label;
+        return option;
+      }),
+    );
+    trendWindowSelect.value = trendState.years ? String(trendState.years) : "";
+  };
+
+  trendWindowSelect.addEventListener("change", (e) => {
+    trendState.years = e.target.value ? Number(e.target.value) : null;
+    if (!trendState.on || trendState.running) return;
+    if (trendState.mode === "global") runGlobalTrends();
+    else runTrends();
+  });
+
+  // Both fits call this once the time axis has resolved.
+  onTrendWindowsReady = fillTrendWindows;
+
   trendsButton.addEventListener("click", () => {
     if (trendState.running) return;
     if (trendState.on) {

@@ -25,7 +25,8 @@ export const INSUFFICIENT = {key: "insufficient", label: "Insufficient data", co
 const MS_PER_YEAR = 365.25 * 86400000;
 
 /**
- * Least-squares slope of `values` against `dates`, in units per year. NaN
+ * Least-squares slope of `values` against `dates`, in units per year, over the
+ * months from `from` onward — which is how the trend window is applied. NaN
  * samples are skipped, so the missing GRACE months and the GRACE/GRACE-FO gap
  * drop out rather than being interpolated across.
  *
@@ -33,13 +34,13 @@ const MS_PER_YEAR = 365.25 * 86400000;
  * remaining month falls on one date — both leave the slope undefined rather
  * than zero, and a zero would read as "static".
  */
-export function computeSlope(dates, values, {minPoints = 24} = {}) {
+export function computeSlope(dates, values, {minPoints = 24, from = 0} = {}) {
   let n = 0;
   let sumX = 0;
   let sumY = 0;
   let sumXY = 0;
   let sumX2 = 0;
-  for (let i = 0; i < values.length; i++) {
+  for (let i = from; i < values.length; i++) {
     const y = values[i];
     if (!Number.isFinite(y)) continue;
     const x = dates[i].getTime() / MS_PER_YEAR;
@@ -127,7 +128,8 @@ export function regionMeanSeries({rings, extent, frames, nT, nLat, nLon, lat, lo
 
 /**
  * Least-squares slope for every cell of a whole-world frame series, in units
- * per year. NaN where a cell has fewer than `minPoints` months with data, which
+ * per year, over the months from `from` onward. NaN where a cell has fewer than
+ * `minPoints` months with data, which
  * is the ocean and the ice sheets as well as the genuinely sparse.
  *
  * Accumulated time-major, one whole frame at a time, rather than cell by cell.
@@ -137,7 +139,7 @@ export function regionMeanSeries({rings, extent, frames, nT, nLat, nLon, lat, lo
  * order reads the buffer sequentially and pays instead for five accumulator
  * arrays, which are small enough to stay resident.
  */
-export function perCellSlopes({frames, nT, nLat, nLon, dates, minPoints = 24}) {
+export function perCellSlopes({frames, nT, nLat, nLon, dates, minPoints = 24, from = 0}) {
   const frameSize = nLat * nLon;
   const n = new Int32Array(frameSize);
   const sumX = new Float64Array(frameSize);
@@ -145,7 +147,7 @@ export function perCellSlopes({frames, nT, nLat, nLon, dates, minPoints = 24}) {
   const sumXY = new Float64Array(frameSize);
   const sumX2 = new Float64Array(frameSize);
 
-  for (let t = 0; t < nT; t++) {
+  for (let t = from; t < nT; t++) {
     const x = dates[t].getTime() / MS_PER_YEAR;
     const x2 = x * x;
     const base = t * frameSize;

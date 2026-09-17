@@ -45,10 +45,6 @@
       </button>
     </div>
 
-    <button id="trends-button" class="rfs-btn rfs-btn-wide" aria-pressed="false">
-      <span data-icon="presentation-chart-line" aria-hidden="true"></span><span data-trends-label>Analyze trends</span>
-    </button>
-
     <label class="rfs-label" for="variable-select">Displayed layer</label>
     <select id="variable-select" class="rfs-select"></select>
 
@@ -105,6 +101,17 @@
     <nav id="breadcrumb" class="flex min-w-0 items-center gap-2" aria-label="Breadcrumb">
       <button id="crumb-home" class="rfs-crumb" type="button">Home</button>
     </nav>
+
+    <!-- Right of the trail: trends act on whatever the trail names. -->
+    <div class="rfs-crumbs-actions">
+      <label id="trend-window" class="rfs-crumbs-field hidden" for="trend-window-select">
+        <span>Window</span>
+        <select id="trend-window-select" class="rfs-crumbs-select"></select>
+      </label>
+      <button id="trends-button" class="rfs-crumbs-btn" type="button" aria-pressed="false">
+        <span data-icon="presentation-chart-line" aria-hidden="true"></span><span data-trends-label>Analyze trends</span>
+      </button>
+    </div>
   </header>
 
 <div id="panel-stack" class="flex min-h-0 w-full flex-1 flex-col">
