@@ -1128,6 +1128,42 @@ const main = async ({polygon, zoomTarget}) => {
     varData[varName] = {
       values,
       meanSeries,
+      // The band is the per-cell sigma averaged the same way the values are,
+      // which is the formula for errors that are perfectly correlated across the
+      // region — every cell wrong in the same direction at once. That is
+      // deliberate, and for most regions it is also exact: the 0.5 degree cells
+      // inside one 3 degree mascon are downsampled from a single GRACE estimate,
+      // so their errors are identical by construction. 49 of the 81 shipped
+      // regions fit inside a single mascon and the median spans 0.6 of one.
+      //
+      // Treating cells as independent instead (quadrature, shrinking as 1/sqrt n)
+      // was considered and rejected. It would be wrong within a mascon, and the
+      // tell is that the band would narrow when the half-degree setting is
+      // switched on — same region, same science, tighter error bars purely
+      // because the raster got finer.
+      //
+      // Doing it properly (correlated within a mascon, independent across) needs
+      // a mascon id per cell, and measuring it first showed it is not worth the
+      // data change: only five regions span enough mascons to matter, and GWSa
+      // barely moves even there. Median per-cell sigma read from the 1.0 degree
+      // store, in cm:
+      //
+      //     chunk                TWSa   SMa   SWEa   GWSa
+      //     tropical S. America  3.85  4.44   0.00   6.21
+      //     arid Africa          1.57  1.17   0.00   2.17
+      //     snowy N. America     2.51  4.54   5.22  11.29
+      //
+      // GRACE is never the dominant term — GLDAS inter-model spread equals or
+      // exceeds it everywhere — and only the GRACE term would narrow, so GWSa's
+      // band on the largest region (Great Artesian, ~16 mascons) would reach 77%
+      // of its current width in the tropics and 94% in snow. TWSa alone would
+      // reach 25%, which is the only visible win.
+      //
+      // So the band being wide is mostly GLDAS models disagreeing with each
+      // other (data/main.py computes SWEa_unc/SMa_unc/CANa_unc as the standard
+      // deviation across Noah, VIC and CLSM, and GWSa_unc sums all four in
+      // quadrature). Narrowing it is a question about those models, not about
+      // this aggregation.
       uncMeanSeries: unc ? weightedMeanTimeSeries(unc.data, unc.shape, unc.stride, intersectingCells, validCellIndices) : null,
       // Color scale bound for this variable's displayed cells
       maxValue: Math.ceil(findMaxAbsForValidCells(values.data, values.shape, values.stride, validCellIndices)) || 30,
