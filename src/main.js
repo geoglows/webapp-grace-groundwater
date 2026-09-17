@@ -504,18 +504,16 @@ const applyMasconVisibility = () => {
 const analyzeGlobalRegion = async ({regionId, name}) => {
   setActiveRegion(regionId);
   setBreadcrumb(name ?? regionRows.find((r) => String(r.id) === String(regionId))?.name ?? "Region");
-  // Load boundary layer + zoom
   await boundaryLayer.load();
 
-  // Before adding to map (or after, either works)
+  // Show only the picked region. definitionExpression filters the features the
+  // layer already holds, so it needs no refresh() — that call re-fetched and
+  // re-parsed the whole 2.3 MB source on every click, which is what stood
+  // between the click and the camera moving.
   boundaryLayer.definitionExpression = `id='${regionId}'`;
-  await boundaryLayer.refresh?.();
-  const boundaryExtent = await boundaryLayer.queryExtent()
-  // expand() rather than a bare extent: goTo takes no padding, and a tight fit
-  // puts the region's edges against the viewport edges.
-  const zoomTarget = boundaryExtent.extent.clone().expand(1.2);
 
-  // ---- Get the actual boundary polygon geometry ----
+  // One query for the geometry, which the analysis needs anyway; its extent is
+  // the same extent queryExtent() used to make a second round trip for.
   const q = boundaryLayer.createQuery();
   q.where = `id='${regionId}'`;
   q.returnGeometry = true;
@@ -525,7 +523,9 @@ const analyzeGlobalRegion = async ({regionId, name}) => {
   if (!fs.features.length) throw new Error("No features found");
   const boundaryGeom = fs.features[0].geometry;
 
-  await main({polygon: boundaryGeom, zoomTarget});
+  // expand() rather than a bare extent: goTo takes no padding, and a tight fit
+  // puts the region's edges against the viewport edges.
+  await main({polygon: boundaryGeom, zoomTarget: boundaryGeom.extent.clone().expand(1.2)});
 }
 
 const analyzeDrawnPolygon = async ({polygon}) => {
