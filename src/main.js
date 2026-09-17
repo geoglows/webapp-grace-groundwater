@@ -198,6 +198,15 @@ const syncSettingsControls = () => {
 // just revealed, one for the view's resize observer to pick up its new size.
 const afterLayout = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
+// Hand the browser a turn so it can paint. setTimeout rather than
+// requestAnimationFrame: rendering happens between tasks, and a rAF callback
+// resumes *before* the paint it was waiting for, so rAF would yield the frame
+// without ever letting one be drawn.
+const yieldToBrowser = () => new Promise((resolve) => setTimeout(resolve, 0));
+// How long a synchronous slice may run before giving the renderer a turn. Above
+// a frame's worth of work the map visibly stops moving.
+const SLICE_MS = 12;
+
 const activeZarrUrl = () => (displayConfig.halfDegreeCells ? ZARR_URL_HALF_DEGREE : ZARR_URL);
 
 const openArray = (name) => openZarrArray(activeZarrUrl(), name);
@@ -930,7 +939,17 @@ const main = async ({polygon, zoomTarget}) => {
   // ---- Find the overlapping areas of the cells with the polygon ----
   if (!geodeticAreaOperator.isLoaded()) await geodeticAreaOperator.load();
   intersectionOperator.accelerateGeometry(polygon);
+  // Three or four WASM geometry calls per cell, over every cell in the region's
+  // bounding box — a second or more of uninterrupted synchronous work on a large
+  // region. That is what froze the map mid-zoom: the camera was animating, but
+  // no frame could be painted until the loop finished, so the view sat still and
+  // then snapped to its destination.
+  //
+  // Slicing by elapsed time rather than by a cell count keeps the pause bounded
+  // whatever the cell size and however fast the machine is. The check sits in
+  // the outer loop so it stays off the hot path.
   const intersectingCells = [];
+  let sliceStart = performance.now();
   for (const y of filteredLats) {
     for (const x of filteredLons) {
       const cell = cellPolygonFromCenter({xCenter: x, yCenter: y, halfWidth: HALF});
@@ -939,6 +958,13 @@ const main = async ({polygon, zoomTarget}) => {
       const intersectArea = intersectsGeom ? geodeticAreaOperator.execute(intersectsGeom) : 0;
       const frac = intersectArea / cellArea;
       intersectingCells.push({lon: x, lat: y, frac, cell, intersects: !!intersectsGeom, overlapArea: intersectArea});
+    }
+    if (performance.now() - sliceStart > SLICE_MS) {
+      await yieldToBrowser();
+      // Yielding is what makes a newer analysis able to start mid-loop, so this
+      // run has to check whether it is still the current one.
+      if (runId !== analysisRunSeq) return;
+      sliceStart = performance.now();
     }
   }
 
