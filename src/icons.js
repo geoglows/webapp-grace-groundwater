@@ -7,6 +7,7 @@ import minus from "heroicons/24/outline/minus.svg?raw";
 import pause from "heroicons/24/solid/pause.svg?raw";
 import pencil from "heroicons/24/outline/pencil.svg?raw";
 import plus from "heroicons/24/outline/plus.svg?raw";
+import presentationChartLine from "heroicons/24/outline/presentation-chart-line.svg?raw";
 import square3Stack3d from "heroicons/24/outline/square-3-stack-3d.svg?raw";
 import play from "heroicons/24/solid/play.svg?raw";
 import xMark from "heroicons/24/outline/x-mark.svg?raw";
@@ -22,6 +23,7 @@ const ICONS = {
   pencil,
   play,
   plus,
+  "presentation-chart-line": presentationChartLine,
   "square-3-stack-3d": square3Stack3d,
   "x-mark": xMark,
 };

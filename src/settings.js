@@ -197,6 +197,22 @@ export const DISPLAY_DEFAULTS = {
   maxValue: envNumber(import.meta.env.VITE_SETTINGS_FIXED_COLOR_SCALE_MAX, 30, {min: 1}),
 };
 
+// ---- trend classification --------------------------------------------------
+// Where the five trend categories divide, in cm/year of liquid water equivalent.
+// A region losing more than `extreme` is an extreme decline, more than
+// `moderate` a decline, and within ±moderate static. The defaults are set
+// against known depletion: the High Plains and Central Valley run around -1 to
+// -2 cm/yr, so 0.5 separates a real signal from noise and 2.0 marks the cases
+// that are usually reported on their own.
+export const TREND_THRESHOLDS = {
+  moderate: envNumber(import.meta.env.VITE_TREND_MODERATE_CM_PER_YEAR, 0.5, {min: 0}),
+  extreme: envNumber(import.meta.env.VITE_TREND_EXTREME_CM_PER_YEAR, 2, {min: 0}),
+};
+// Months a region needs before it is classified rather than called
+// insufficient. GRACE has ~290 months with gaps, so this is a low bar that only
+// excludes regions almost entirely masked out.
+export const TREND_MIN_MONTHS = envNumber(import.meta.env.VITE_TREND_MIN_MONTHS, 24, {min: 2});
+
 // ---- time slider -----------------------------------------------------------
 export const GLOBAL_PLAY_RATE_MS = envNumber(import.meta.env.VITE_GLOBAL_PLAY_RATE_MS, 250, {min: 50});
 export const REGIONAL_PLAY_RATE_MS = envNumber(import.meta.env.VITE_REGIONAL_PLAY_RATE_MS, 1000, {min: 50});

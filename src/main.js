@@ -27,11 +27,14 @@ import {hydrateIcons} from "./icons.js";
 import Polygon from "@arcgis/core/geometry/Polygon.js";
 import {parseGeoJSONFile} from "./polygonUploads.js";
 import {deleteUserRegion, listUserRegions, newUserRegionId, putUserRegion} from "./userRegions.js";
+import {INSUFFICIENT, TREND_CATEGORIES, classify, computeSlope, regionMeanSeries} from "./trends.js";
 import {createTimeControl} from "./timeControl.js";
 import {
   COLOR_PALETTES,
   DEFAULT_VIEW,
   DISPLAY_DEFAULTS,
+  TREND_MIN_MONTHS,
+  TREND_THRESHOLDS,
   GLOBAL_PLAY_RATE_MS,
   MAP_BASEMAP,
   MAP_CENTER,
@@ -180,6 +183,12 @@ const dynamicScaleToggle = document.getElementById("dynamic-scale-toggle");
 const dynamicScaleNote = document.getElementById("dynamic-scale-note");
 const legendToggle = document.getElementById("legend-toggle");
 const seriesToggles = document.getElementById("series-toggles");
+const trendsButton = document.getElementById("trends-button");
+const trendsLabel = document.querySelector("[data-trends-label]");
+const trendLegendDiv = document.getElementById("trend-legend");
+const trendLegendTitle = document.getElementById("trend-legend-title");
+const trendLegendSub = document.getElementById("trend-legend-sub");
+const trendLegendRows = document.getElementById("trend-legend-rows");
 const regionList = document.getElementById("region-list");
 const regionFilter = document.getElementById("region-filter");
 const breadcrumb = document.getElementById("breadcrumb");
@@ -477,7 +486,11 @@ const regionLabelFor = (dark) => ({
 // layer a new one rather than editing what it has.
 const applyBasemapContrast = (basemapId) => {
   darkBasemap = isDarkBasemap(basemapId);
-  boundaryLayer.renderer = {type: "simple", symbol: regionSymbolFor(darkBasemap)};
+  // Trends own the region fill while they are showing, so they are recolored
+  // rather than replaced.
+  boundaryLayer.renderer = trendState.on
+    ? (applyTrendRenderer(), boundaryLayer.renderer)
+    : {type: "simple", symbol: regionSymbolFor(darkBasemap)};
   boundaryLayer.labelingInfo = [regionLabelFor(darkBasemap)];
   masconLayer.renderer = masconRenderer();
   for (const g of uploadedLayer.graphics) g.symbol = uploadedSymbolFor(darkBasemap);
@@ -495,6 +508,151 @@ const boundaryLayer = new GeoJSONLayer({
   labelingInfo: [regionLabelFor(darkBasemap)],
   labelsVisible: displayConfig.showRegionNames,
 });
+
+// ---- Trend classification --------------------------------------------------
+// Every region colored by the slope of its own area-mean series, computed off
+// the whole-world frames the global view already downloads rather than by
+// running the per-region analysis 81 times. See trends.js for what that trades.
+const trendState = {
+  on: false,
+  running: false,
+  // varName the showing classification was computed for, so switching the
+  // displayed layer recomputes rather than mislabeling.
+  varName: null,
+  byRegion: new Map(), // region id -> category
+};
+
+// Rings per region, queried once. The boundary layer holds them already; this
+// pulls them into plain arrays so the point-in-polygon test in trends.js can
+// work without the geometry operators.
+let regionRingsPromise = null;
+const ensureRegionRings = () => {
+  regionRingsPromise ??= (async () => {
+    await boundaryLayer.load();
+    const q = boundaryLayer.createQuery();
+    q.where = "1=1";
+    q.outFields = ["id", "n"];
+    q.returnGeometry = true;
+    const {features} = await boundaryLayer.queryFeatures(q);
+    return features.map((f) => ({
+      id: f.attributes.id,
+      name: f.attributes.n,
+      rings: f.geometry.rings,
+      extent: f.geometry.extent,
+    }));
+  })().catch((err) => {
+    regionRingsPromise = null;
+    throw err;
+  });
+  return regionRingsPromise;
+};
+
+const renderTrendLegend = (varName) => {
+  const {moderate, extreme} = TREND_THRESHOLDS;
+  trendLegendTitle.textContent = `${varName} trend (${UNITS}/yr)`;
+  trendLegendSub.textContent = `thresholds ±${moderate} and ±${extreme} ${UNITS}/yr`;
+
+  const counts = new Map();
+  for (const cat of trendState.byRegion.values()) counts.set(cat.key, (counts.get(cat.key) ?? 0) + 1);
+
+  // Increase at the top, decline at the bottom: the legend reads the way the
+  // values do.
+  const ordered = [...TREND_CATEGORIES].reverse().concat(INSUFFICIENT);
+  trendLegendRows.replaceChildren(
+    ...ordered.map((cat) => {
+      const row = document.createElement("div");
+      row.className = "trend-legend-row";
+      const swatch = document.createElement("span");
+      swatch.className = "trend-legend-swatch";
+      swatch.style.background = cat.color;
+      const label = document.createElement("span");
+      label.textContent = cat.label;
+      const count = document.createElement("span");
+      count.className = "trend-legend-count";
+      count.textContent = String(counts.get(cat.key) ?? 0);
+      row.append(swatch, label, count);
+      return row;
+    }),
+  );
+};
+
+// A unique-value renderer keyed on the region id, rather than a second layer of
+// filled graphics: the geometry is already on the map and 81 symbols are
+// cheaper than 81 copies of it.
+const applyTrendRenderer = () => {
+  boundaryLayer.renderer = {
+    type: "unique-value",
+    field: "id",
+    defaultSymbol: {
+      type: "simple-fill",
+      color: [100, 116, 139, 0.18],
+      outline: {color: INSUFFICIENT.color, width: 1},
+    },
+    uniqueValueInfos: [...trendState.byRegion].map(([id, cat]) => ({
+      value: id,
+      symbol: {
+        type: "simple-fill",
+        color: [...hexToRgb(cat.color), 0.55],
+        outline: {color: darkBasemap ? [255, 255, 255, 0.5] : [30, 41, 59, 0.55], width: 0.75},
+      },
+    })),
+  };
+};
+
+const hexToRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+
+const setTrendsOff = () => {
+  trendState.on = false;
+  trendState.varName = null;
+  trendState.byRegion.clear();
+  boundaryLayer.renderer = {type: "simple", symbol: regionSymbolFor(darkBasemap)};
+  trendLegendDiv.classList.add("hidden");
+  trendsButton.setAttribute("aria-pressed", "false");
+  trendsLabel.textContent = "Analyze trends";
+};
+
+const runTrends = async () => {
+  const varName = displayConfig.variable;
+  trendState.running = true;
+  trendsButton.disabled = true;
+  trendsLabel.textContent = "Analyzing…";
+  try {
+    // The same frames and the same worker the global view uses, so a variable
+    // already loaded there costs nothing here.
+    const [regions, {frames, nT, nLat, nLon}, {lat, lon}] = await Promise.all([
+      ensureRegionRings(),
+      ensureGlobalData(varName).then(() => globalView.byVar[varName].data),
+      ensureCoords(resolutionOf(varName)),
+    ]);
+
+    trendState.byRegion.clear();
+    for (const region of regions) {
+      const series = regionMeanSeries({
+        rings: region.rings,
+        extent: region.extent,
+        frames, nT, nLat, nLon,
+        lat: lat.data, lon: lon.data,
+      });
+      const slope = series ? computeSlope(timeDates, series, {minPoints: TREND_MIN_MONTHS}) : null;
+      trendState.byRegion.set(region.id, classify(slope, TREND_THRESHOLDS));
+    }
+
+    trendState.on = true;
+    trendState.varName = varName;
+    applyTrendRenderer();
+    renderTrendLegend(varName);
+    trendLegendDiv.classList.remove("hidden");
+    trendsButton.setAttribute("aria-pressed", "true");
+    trendsLabel.textContent = "Hide trends";
+  } catch (err) {
+    console.error("Could not classify the region trends", err);
+    setTrendsOff();
+    trendsLabel.textContent = "Trends unavailable";
+  } finally {
+    trendState.running = false;
+    trendsButton.disabled = false;
+  }
+};
 
 // ---- Left panel: region list and breadcrumb --------------------------------
 // One row per region, built once from the layer's own features so the list and
@@ -1634,6 +1792,7 @@ const bootMapUi = async () => {
   // order: top-right holds the drawing tools, then the load-progress bar, the
   // shared color bar, and the layer dropdown beneath it; the compact time
   // slider sits bottom-left.
+  arcgisMap.view.ui.add(trendLegendDiv, "top-right");
   arcgisMap.view.ui.add(zoomControl, "top-left");
   arcgisMap.view.ui.add(basemapControl, "top-left");
   arcgisMap.view.ui.add(drawControl, "top-right");
@@ -1718,6 +1877,14 @@ const bootMapUi = async () => {
   // back to the full set of outlines.
   crumbHome.addEventListener("click", () => resetLayers());
 
+  // Trends replace the region outlines' fill, so the two cannot be shown at
+  // once. Pressing again restores the plain symbology.
+  trendsButton.addEventListener("click", () => {
+    if (trendState.running) return;
+    if (trendState.on) setTrendsOff();
+    else runTrends();
+  });
+
   regionFilter.addEventListener("input", applyRegionFilter);
 
   // Comparison curves. Only the chart changes, so this asks for a redraw of the
@@ -1748,6 +1915,9 @@ const bootMapUi = async () => {
   variableSelect.addEventListener("change", () => {
     displayConfig.variable = variableSelect.value;
     syncSeriesToggles(); // the lock moves with the displayed layer
+    // A classification belongs to one variable; keeping it under another
+    // variable's name would be a lie, so it is recomputed.
+    if (trendState.on && trendState.varName !== displayConfig.variable) runTrends();
     if (globalView.active) analyzeGlobalView({keepView: true});
     else regionalVariableHandler?.();
     // neither view active (instructions showing): the next analysis picks it up

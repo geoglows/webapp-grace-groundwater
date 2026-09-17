@@ -45,6 +45,10 @@
       </button>
     </div>
 
+    <button id="trends-button" class="rfs-btn rfs-btn-wide" aria-pressed="false">
+      <span data-icon="presentation-chart-line" aria-hidden="true"></span><span data-trends-label>Analyze trends</span>
+    </button>
+
     <label class="rfs-label" for="variable-select">Displayed layer</label>
     <select id="variable-select" class="rfs-select"></select>
 
@@ -370,6 +374,63 @@
   <button id="draw-button" type="button" aria-pressed="false">
     <span data-icon="pencil" aria-hidden="true"></span><span data-draw-label>Draw a polygon</span>
   </button>
+</div>
+<div id="trend-legend" class="trend-legend absolute hidden">
+  <style>
+      /* Custom properties inherit through the shadow boundary, so the tokens on
+         :root still resolve here even though style.css's selectors do not. */
+      .trend-legend {
+          width: 215px;
+          padding: 9px 12px;
+          font-family: "Open Sans", "Segoe UI", system-ui, sans-serif;
+          color: var(--text, #f8fafc);
+          background: var(--surface, #111827);
+          border: 1px solid var(--border, #334155);
+          border-radius: var(--r-md, 6px);
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+      }
+
+      .trend-legend.hidden {
+          display: none;
+      }
+
+      .trend-legend-title {
+          font-size: 12px;
+          font-weight: 700;
+      }
+
+      .trend-legend-sub {
+          margin: 1px 0 7px;
+          font-size: 10px;
+          color: var(--text-faint, #b6c2d3);
+      }
+
+      .trend-legend-row {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          padding: 1px 0;
+          font-size: 11px;
+          color: var(--text-dim, #dde5ee);
+      }
+
+      /* A square rather than a dot: it stands for a filled polygon. */
+      .trend-legend-swatch {
+          height: 11px;
+          width: 11px;
+          flex-shrink: 0;
+          border-radius: 2px;
+      }
+
+      .trend-legend-count {
+          margin-left: auto;
+          font-variant-numeric: tabular-nums;
+          color: var(--text-faint, #b6c2d3);
+      }
+  </style>
+  <div id="trend-legend-title" class="trend-legend-title"></div>
+  <div id="trend-legend-sub" class="trend-legend-sub"></div>
+  <div id="trend-legend-rows"></div>
 </div>
 <div id="map-legend" class="map-legend absolute hidden">
   <style>
