@@ -568,10 +568,18 @@ const masconRenderer = () => ({
   symbol: {
     type: "simple-fill",
     color: [255, 255, 255, 0],
+    // Dashed, because the anomaly cell boundaries are solid lines of much the
+    // same weight and color: with both layers on, two solid grids at different
+    // spacings are hard to tell apart, and telling them apart is the only
+    // reason to show the mascons at all. Dashes also read as the softer
+    // statement — a cell edge is where the data changes, a mascon edge is where
+    // the measurement behind it changes.
+    //
     // Near-black is invisible on imagery, so it inverts to near-white there.
     outline: {
-      color: darkBasemap ? [235, 235, 235, 0.8] : [38, 38, 38, 0.75],
+      color: darkBasemap ? [235, 235, 235, 0.85] : [38, 38, 38, 0.8],
       width: displayConfig.masconWidth,
+      style: "dash",
     },
   }
 });
@@ -1250,8 +1258,11 @@ const main = async ({polygon, zoomTarget}) => {
       type: "simple",
       symbol: {
         type: "simple-fill",
+        // Solid, and the mascon outlines above are dashed, so the two grids
+        // stay distinguishable when both are on. Black over a pale basemap,
+        // white over imagery, for the same reason the region outlines switch.
         outline: displayConfig.showBorders
-          ? {color: [0, 0, 0, 1], width: displayConfig.borderWidth}
+          ? {color: darkBasemap ? [255, 255, 255, 0.85] : [0, 0, 0, 1], width: displayConfig.borderWidth}
           : {color: [0, 0, 0, 0], width: 0}
       },
       visualVariables: [{
@@ -1701,8 +1712,11 @@ const bootMapUi = async () => {
       type: "simple",
       symbol: {
         type: "simple-fill",
+        // Solid, and the mascon outlines above are dashed, so the two grids
+        // stay distinguishable when both are on. Black over a pale basemap,
+        // white over imagery, for the same reason the region outlines switch.
         outline: displayConfig.showBorders
-          ? {color: [0, 0, 0, 1], width: displayConfig.borderWidth}
+          ? {color: darkBasemap ? [255, 255, 255, 0.85] : [0, 0, 0, 1], width: displayConfig.borderWidth}
           : {color: [0, 0, 0, 0], width: 0}
       },
       visualVariables: [{
