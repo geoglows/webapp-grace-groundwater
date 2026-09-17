@@ -140,6 +140,7 @@ export function renderTimeseriesChart({
   series,
   units = "cm",
   valueLabel = "Liquid Water Equivalent",
+  fillGaps = true,
   fileStem,
   getCsv,
 }) {
@@ -157,8 +158,14 @@ export function renderTimeseriesChart({
     const wantsBand = idx === 0 && !multiple && uncertainty;
     for (let i = 0; i < dates.length; i++) {
       const y = values[i];
-      if (!Number.isFinite(y)) continue;
       const x = dates[i].getTime();
+      if (!Number.isFinite(y)) {
+        // A null y is what breaks the line in Chart.js. Carried only when the
+        // gaps are meant to show: dropping the point entirely is what makes the
+        // neighbours join up, so `fillGaps` is the choice between the two.
+        if (!fillGaps) line.push({x, y: null});
+        continue;
+      }
       line.push({x, y});
       if (!wantsBand) continue;
       const unc = uncertainty[i];

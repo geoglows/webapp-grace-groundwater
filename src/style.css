@@ -170,6 +170,9 @@ body.panel-resizing * {
    rather than on :root because the rest of the app is still light and would
    get dark native controls on white cards. */
 .rfs-panel {
+    /* The region list owns its own scrolling; this is the fallback for a window
+       too short to show the controls above it. */
+    overflow-y: auto;
     color-scheme: dark;
     font-family: "Open Sans", "Segoe UI", system-ui, sans-serif;
     background: var(--surface);
@@ -309,8 +312,12 @@ body.panel-resizing * {
     padding: 0 18px 10px;
 }
 
+/* A fixed height, not a share of what is left over: the controls above this
+   grow as settings move out of the modal, and a list sized by the remainder
+   shrinks every time one does. It scrolls internally at any window height, and
+   the panel scrolls as a whole if a short window cannot fit even this. */
 .rfs-list {
-    flex: 1 1 auto;
+    flex: 0 0 var(--region-list-height, 260px);
     min-height: 0;
     overflow-y: auto;
     padding-bottom: 8px;
@@ -483,6 +490,27 @@ body.panel-resizing * {
     display: flex;
     flex-direction: column;
     gap: 2px;
+}
+
+/* Two columns: four variables make a tidy 2x2 and give back two rows of panel
+   height, which the region list below is short of. */
+.rfs-checks-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px 8px;
+}
+
+/* A checkbox that is its own row rather than a cell in the grid above. */
+.rfs-check-wide {
+    margin-top: 6px;
+}
+
+/* The ramp the select names, drawn on the -1..1 axis the color bar uses. */
+.rfs-ramp {
+    height: 8px;
+    margin-top: 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
 }
 
 .rfs-check {

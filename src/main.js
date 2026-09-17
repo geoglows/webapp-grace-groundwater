@@ -171,7 +171,9 @@ const masconWidthValue = document.getElementById("mascon-width-value");
 const halfDegreeToggle = document.getElementById("half-degree-toggle");
 const opacitySlider = document.getElementById("opacity-slider");
 const opacityValue = document.getElementById("opacity-value");
-const paletteOptions = document.getElementById("palette-options");
+const paletteSelect = document.getElementById("palette-select");
+const palettePreview = document.getElementById("palette-preview");
+const fillGapsToggle = document.getElementById("fill-gaps-toggle");
 
 // Build the two lists that are generated from data rather than written out in
 // index.html — the layer dropdown from VARIABLES, the palette radios from
@@ -188,30 +190,16 @@ const syncSettingsControls = () => {
   );
   variableSelect.value = displayConfig.variable;
 
-  paletteOptions.replaceChildren(
+  paletteSelect.replaceChildren(
     ...Object.entries(COLOR_PALETTES).map(([key, {label}]) => {
-      const option = document.createElement("label");
-      option.className = "flex cursor-pointer items-center gap-3 rounded-md border-2 border-neutral-300 px-3 py-2 transition hover:bg-neutral-100 has-[input:checked]:border-sky-700 has-[input:checked]:bg-sky-50";
-
-      const radio = document.createElement("input");
-      radio.type = "radio";
-      radio.name = "color-palette";
-      radio.value = key;
-      radio.className = "hidden";
-      radio.checked = key === displayConfig.colorPalette;
-
-      const swatch = document.createElement("span");
-      swatch.className = "block h-5 w-20 rounded-sm border border-neutral-300";
-      swatch.style.background = paletteCssGradient(key);
-
-      const name = document.createElement("span");
-      name.className = "text-sm text-neutral-800";
-      name.textContent = label;
-
-      option.append(radio, swatch, name);
+      const option = document.createElement("option");
+      option.value = key;
+      option.textContent = label;
       return option;
     }),
   );
+  paletteSelect.value = displayConfig.colorPalette;
+  palettePreview.style.background = paletteCssGradient(displayConfig.colorPalette);
 
   seriesToggles.replaceChildren(
     ...Object.entries(VARIABLES).map(([key, {color}]) => {
@@ -243,6 +231,7 @@ const syncSettingsControls = () => {
   legendToggle.checked = displayConfig.showLegend;
   regionNamesToggle.checked = displayConfig.showRegionNames;
   masconToggle.checked = displayConfig.showMascons;
+  fillGapsToggle.checked = displayConfig.fillGaps;
   masconWidthSlider.value = String(displayConfig.masconWidth);
   masconWidthValue.textContent = `${displayConfig.masconWidth}px`;
   halfDegreeToggle.checked = displayConfig.halfDegreeCells;
@@ -1211,6 +1200,7 @@ const main = async ({polygon, zoomTarget}) => {
       series,
       units: UNITS,
       valueLabel: VALUE_LABEL,
+      fillGaps: displayConfig.fillGaps,
       fileStem: `grace_${displayConfig.variable.toLowerCase()}`,
       // Every variable, not only the plotted ones: a file whose columns depend
       // on what happened to be toggled is a poor record of the region. The ones
@@ -1578,6 +1568,13 @@ const bootMapUi = async () => {
   // chart rather than of the whole analysis. With no analysis showing there is
   // nothing to redraw and the choice is simply remembered for the next one.
   syncSeriesToggles();
+  // Gaps are a chart concern only: the raster and the color bar say nothing
+  // about the months GRACE is missing.
+  fillGapsToggle.addEventListener("change", (e) => {
+    displayConfig.fillGaps = e.target.checked;
+    regionalSeriesHandler?.();
+  });
+
   seriesToggles.addEventListener("change", (e) => {
     const key = e.target.dataset?.series;
     if (!key) return;
@@ -1739,8 +1736,8 @@ const bootMapUi = async () => {
 
   // Color palette radio buttons (generated in syncSettingsControls, so one
   // delegated listener rather than one per palette)
-  paletteOptions.addEventListener("change", (e) => {
-    if (e.target.name !== "color-palette") return;
+  paletteSelect.addEventListener("change", (e) => {
+    palettePreview.style.background = paletteCssGradient(e.target.value);
     displayConfig.colorPalette = e.target.value;
     updateAnomalyLayerAppearance();
   });

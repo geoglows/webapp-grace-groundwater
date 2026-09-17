@@ -159,6 +159,11 @@ export const DISPLAY_DEFAULTS = {
   showBorders: envBool(import.meta.env.VITE_SETTINGS_SHOW_CELL_BORDERS, false),
   borderWidth: envNumber(import.meta.env.VITE_SETTINGS_CELL_BORDER_WIDTH, 0.5, {min: 0.5, max: 3}),
   showLegend: envBool(import.meta.env.VITE_SETTINGS_MAP_LEGEND_VISIBLE, true),
+  // Whether the time series line bridges the months GRACE has no data for —
+  // scattered gaps plus the ~11 month GRACE/GRACE-FO handover. On, the line is
+  // continuous and easier to read as a trend; off, it breaks at every gap and
+  // the record's coverage is visible instead.
+  fillGaps: envBool(import.meta.env.VITE_SETTINGS_FILL_GAPS, true),
   // Region names drawn on the outlines in the regional view.
   showRegionNames: envBool(import.meta.env.VITE_SETTINGS_SHOW_REGION_NAMES, true),
   // Labels stay off until the view is zoomed in past this scale. Collision

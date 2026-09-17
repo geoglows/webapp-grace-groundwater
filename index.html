@@ -33,11 +33,25 @@
     <label class="rfs-label" for="variable-select">Displayed layer</label>
     <select id="variable-select" class="rfs-select"></select>
 
-    <!-- One row per variable, built from VARIABLES in main.js. The displayed
-         layer's row is checked and disabled: the chart always includes what the
-         map is showing. -->
+    <!-- One cell per variable, built from VARIABLES in main.js. The displayed
+         layer's is checked and disabled: the chart always includes what the map
+         is showing. -->
     <p class="rfs-label rfs-label-spaced">Time series</p>
-    <div id="series-toggles" class="rfs-checks"></div>
+    <div id="series-toggles" class="rfs-checks rfs-checks-grid"></div>
+    <label class="rfs-check rfs-check-wide">
+      <input type="checkbox" id="fill-gaps-toggle">
+      <span>Fill gaps in the record</span>
+    </label>
+
+    <label class="rfs-label rfs-label-spaced" for="palette-select">Color ramp</label>
+    <select id="palette-select" class="rfs-select"></select>
+    <!-- The select names the ramp; this shows it. -->
+    <div id="palette-preview" class="rfs-ramp"></div>
+
+    <label class="rfs-check rfs-check-wide">
+      <input type="checkbox" id="mascon-toggle">
+      <span>Show mascon boundaries</span>
+    </label>
 
     <div class="rfs-actions">
       <button id="refresh-layers" class="rfs-btn" aria-pressed="true">
@@ -430,10 +444,6 @@
     <div class="mb-6">
       <h3 class="mb-3 text-base font-bold text-neutral-800">GRACE Mascon Footprints</h3>
       <div class="mb-3 flex items-center gap-3">
-        <label for="mascon-toggle" class="min-w-[120px] text-sm">Show mascon boundaries</label>
-        <input type="checkbox" id="mascon-toggle" class="size-[18px] cursor-pointer accent-sky-700">
-      </div>
-      <div class="mb-3 flex items-center gap-3">
         <label for="mascon-width" class="min-w-[120px] text-sm">Boundary width</label>
         <input type="range" id="mascon-width" min="0.5" max="3" step="0.25" class="max-w-[150px] flex-1 cursor-pointer accent-sky-700">
         <span id="mascon-width-value" class="min-w-[40px] text-sm text-neutral-600"></span>
@@ -455,12 +465,6 @@
                class="max-w-[150px] flex-1 cursor-pointer accent-sky-700">
         <span id="border-width-value" class="min-w-[40px] text-sm text-neutral-600"></span>
       </div>
-    </div>
-
-    <div class="mb-6">
-      <h3 class="mb-3 text-base font-bold text-neutral-800">Color Palette</h3>
-      <p class="mb-3 text-[13px] text-neutral-600">Choose a color scheme for the anomaly visualization</p>
-      <div id="palette-options" class="flex flex-col gap-2"></div>
     </div>
 
     <div class="mb-6">
