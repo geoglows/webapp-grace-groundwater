@@ -74,6 +74,7 @@ const BASEMAPS = [
   {id: "satellite", label: "Imagery (Esri)", dark: true},
   {id: "streets-vector", label: "Streets (Esri)"},
   {id: "gray-vector", label: "Light Gray (Esri)"},
+  {id: "dark-gray-vector", label: "Dark Gray (Esri)", dark: true},
   {id: "terrain", label: "Terrain (Esri)"},
 ];
 
