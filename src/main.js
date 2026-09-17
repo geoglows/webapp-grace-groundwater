@@ -43,9 +43,14 @@ import {
 } from "./settings.js";
 import {initPanelSplitter} from "./splitPanels.js";
 import {renderTimeseriesChart, seriesToCsv} from "./timeseriesChart.js";
+import {pruneStaleCache} from "./db.js";
 import {openZarrArray} from "./zarrStore.js";
 
 hydrateIcons();  // heroicons
+
+// Clear out entries from an earlier DATA_VERSION. Fire and forget: nothing
+// waits on it, and failing leaves the old rows rather than breaking the load.
+pruneStaleCache().catch((err) => console.warn("Could not prune the cache", err));
 
 // Branding (logo, its link, its alt text) is not set here: index.html carries it
 // as %VITE_*% template strings that Vite substitutes at build time.
