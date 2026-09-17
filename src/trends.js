@@ -34,7 +34,7 @@ const MS_PER_YEAR = 365.25 * 86400000;
  * remaining month falls on one date — both leave the slope undefined rather
  * than zero, and a zero would read as "static".
  */
-export function computeSlope(dates, values, {minPoints = 24, from = 0} = {}) {
+export function computeFit(dates, values, {minPoints = 24, from = 0} = {}) {
   let n = 0;
   let sumX = 0;
   let sumY = 0;
@@ -53,7 +53,44 @@ export function computeSlope(dates, values, {minPoints = 24, from = 0} = {}) {
   if (n < minPoints) return null;
   const denom = n * sumX2 - sumX * sumX;
   if (denom === 0) return null;
-  return (n * sumXY - sumX * sumY) / denom;
+  const slope = (n * sumXY - sumX * sumY) / denom;
+  // Intercept in the same x units the slope is in — years since the epoch — so
+  // evaluating the line means the same arithmetic that fitted it.
+  return {slope, intercept: (sumY - slope * sumX) / n, n};
+}
+
+export function computeSlope(dates, values, options) {
+  return computeFit(dates, values, options)?.slope ?? null;
+}
+
+/**
+ * The fitted line as two points, ready to plot: the start of the window and the
+ * last month with data. Two points because a straight line needs no more, and
+ * the segment then shows the window the fit was taken over as well as its slope.
+ */
+export function fitEndpoints(dates, values, fit, {from = 0} = {}) {
+  if (!fit) return null;
+  let lastIdx = -1;
+  for (let i = values.length - 1; i >= from; i--) {
+    if (Number.isFinite(values[i])) {
+      lastIdx = i;
+      break;
+    }
+  }
+  if (lastIdx < 0) return null;
+  let firstIdx = -1;
+  for (let i = from; i <= lastIdx; i++) {
+    if (Number.isFinite(values[i])) {
+      firstIdx = i;
+      break;
+    }
+  }
+  if (firstIdx < 0) return null;
+  const at = (i) => {
+    const ms = dates[i].getTime();
+    return {x: ms, y: fit.slope * (ms / MS_PER_YEAR) + fit.intercept};
+  };
+  return [at(firstIdx), at(lastIdx)];
 }
 
 /** The category a slope falls in, or INSUFFICIENT for a null slope. */

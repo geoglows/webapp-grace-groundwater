@@ -27,7 +27,7 @@ import {hydrateIcons} from "./icons.js";
 import Polygon from "@arcgis/core/geometry/Polygon.js";
 import {parseGeoJSONFile} from "./polygonUploads.js";
 import {deleteUserRegion, listUserRegions, newUserRegionId, putUserRegion} from "./userRegions.js";
-import {INSUFFICIENT, TREND_CATEGORIES, classify, computeSlope, perCellSlopes, regionMeanSeries} from "./trends.js";
+import {INSUFFICIENT, TREND_CATEGORIES, classify, computeFit, computeSlope, fitEndpoints, perCellSlopes, regionMeanSeries} from "./trends.js";
 import {createTimeControl} from "./timeControl.js";
 import {
   COLOR_PALETTES,
@@ -694,6 +694,7 @@ const setTrendsOff = () => {
   trendWindowField.classList.add("hidden");
   trendsButton.setAttribute("aria-pressed", "false");
   trendsLabel.textContent = "Analyze trends";
+  regionalSeriesHandler?.(); // drop the fitted line from a showing chart
 };
 
 // Trends belong to the view that produced them. Entering the global view drops
@@ -812,6 +813,9 @@ const runTrends = async () => {
     trendWindowField.classList.remove("hidden");
     trendsButton.setAttribute("aria-pressed", "true");
     trendsLabel.textContent = "Hide trends";
+    // A showing analysis picks up its fitted line, or a new one for a changed
+    // window. No-op when no region is being analyzed.
+    regionalSeriesHandler?.();
   } catch (err) {
     console.error("Could not classify the region trends", err);
     setTrendsOff();
@@ -1663,13 +1667,30 @@ const main = async ({polygon, zoomTarget}) => {
   const seriesFor = (varName) => {
     const {longName, color} = VARIABLES[varName];
     const d = varData[varName];
-    return {
+    const entry = {
       name: varName,
       longName,
       color,
       values: d.meanSeries,
       uncertainty: d.uncMeanSeries, // null when the store has no <var>_unc array
     };
+
+    // While the region classification is showing, each plotted series carries
+    // the fit behind it — the same least-squares line over the same window that
+    // decided the region's color, so the chart shows the reasoning rather than
+    // just the verdict. Fitted on this region's exact area-weighted mean, where
+    // the classification used the cheaper whole-world approximation, so the two
+    // can differ slightly; this is the more accurate of the two.
+    if (trendState.on && trendState.mode === "region") {
+      const {from, label} = trendWindow();
+      const fit = computeFit(timeDates, d.meanSeries, {minPoints: TREND_MIN_MONTHS, from});
+      const trendPoints = fitEndpoints(timeDates, d.meanSeries, fit, {from});
+      if (trendPoints) {
+        entry.trendPoints = trendPoints;
+        entry.trendLabel = `${varName} trend ${fit.slope >= 0 ? "+" : ""}${fit.slope.toFixed(2)} ${UNITS}/yr (${label})`;
+      }
+    }
+    return entry;
   };
 
   // Draw the displayed layer plus whatever comparisons are toggled on. Each is

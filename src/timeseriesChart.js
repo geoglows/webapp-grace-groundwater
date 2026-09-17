@@ -127,6 +127,10 @@ const downloadCsv = (csv, filename) => {
  * variables are liquid water equivalent in the same units, which is what lets
  * them share one axis.
  *
+ * A series may carry `trendPoints`, two {x, y} pairs, which are drawn as a
+ * dashed line in that series' color — the least-squares fit over the trend
+ * window. The fit is computed in trends.js; this only draws it.
+ *
  * `getCsv` is called on download and returns the file contents, possibly after
  * loading variables that are not plotted — see the CSV note in main.js.
  *
@@ -270,6 +274,26 @@ export function renderTimeseriesChart({
       order: 0,
     });
   });
+  const lineEnd = datasets.length;
+
+  // Fitted trends, dashed, in their series' color: two points each, so the
+  // segment shows the window the fit was taken over as well as its slope. Added
+  // after the data lines so the legend lists the data first, and excluded from
+  // the tooltip — the reading at a month is the measurement, not the fit.
+  series.forEach(({name, color, trendPoints, trendLabel}) => {
+    if (!trendPoints) return;
+    datasets.push({
+      label: trendLabel ?? `${name} trend`,
+      data: trendPoints,
+      borderColor: color ?? DEFAULT_LINE_COLOR,
+      borderWidth: 2,
+      borderDash: [6, 4],
+      pointRadius: 0,
+      pointHitRadius: 0,
+      fill: false,
+      order: 0,
+    });
+  });
 
   const chart = new Chart(canvas, {
     type: "line",
@@ -314,16 +338,17 @@ export function renderTimeseriesChart({
         // With one curve the title already says which variable it is; with
         // several the legend is the only thing that does.
         legend: {
-          display: multiple,
+          display: multiple || series.some((s) => s.trendPoints),
           position: "bottom",
           labels: {color: axisText, boxWidth: 12, boxHeight: 2, font: {size: 11}},
           // The band's two datasets have no meaning of their own to show.
           filter: (item) => item.datasetIndex >= lineStart,
         },
         tooltip: {
-          // Only the lines carry a meaningful reading; the band series would
-          // otherwise add two noise rows to every tooltip.
-          filter: (item) => item.datasetIndex >= lineStart,
+          // Only the data lines carry a reading at a month: the band's two
+          // series and the fitted trends would add rows that say nothing about
+          // that month in particular.
+          filter: (item) => item.datasetIndex >= lineStart && item.datasetIndex < lineEnd,
           callbacks: {
             label: (item) => `${item.dataset.label}: ${item.parsed.y.toFixed(2)} ${units}`,
           },
