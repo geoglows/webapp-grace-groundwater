@@ -262,12 +262,13 @@ body.panel-resizing * {
 }
 
 /* Two per row: four actions make a tidy 2x2 that stays legible at 320px, where
-   a single row would clip the labels. */
+   a single row would clip the labels. They lead the panel, so the margin is
+   below them. */
 .rfs-actions {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 6px;
-    margin-top: 12px;
+    margin-bottom: 16px;
 }
 
 .rfs-btn {
