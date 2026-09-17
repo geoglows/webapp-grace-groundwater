@@ -1092,7 +1092,7 @@ const main = async ({polygon, zoomTarget}) => {
   // Generate the timeseries plot for the displayed variable (re-run on toggle)
   const plotTimeseries = () => {
     const varName = displayConfig.variable;
-    const {short, longName} = VARIABLES[varName];
+    const {short, longName, color} = VARIABLES[varName];
     const d = varData[varName];
     activeChart?.destroy();
     activeChart = renderTimeseriesChart({
@@ -1104,6 +1104,7 @@ const main = async ({polygon, zoomTarget}) => {
       longName,
       units: UNITS,
       valueLabel: VALUE_LABEL,
+      color,
       fileStem: `grace_${varName.toLowerCase()}`,
     });
   };

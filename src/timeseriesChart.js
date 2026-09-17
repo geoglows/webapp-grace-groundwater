@@ -50,10 +50,17 @@ Chart.register(timeMarkerPlugin);
 const token = (name, fallback) =>
   getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback;
 
-// Brighter than the map's #1c6eec, which is the blue end of the anomaly scale
-// and reads as near-black against a --surface ground.
-const LINE_COLOR = "#60a5fa";
-const BAND_COLOR = "rgba(96,165,250,0.25)";
+// The line color a caller did not name. #60a5fa is GWSa's, and brighter than the
+// map's #1c6eec, which is the blue end of the anomaly scale and reads as
+// near-black against a --surface ground.
+const DEFAULT_LINE_COLOR = "#60a5fa";
+
+// The uncertainty band is the line at low alpha, so a new variable color needs
+// nothing beyond the one hex value in VARIABLES.
+const withAlpha = (hex, alpha) => {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  return `rgba(${r},${g},${b},${alpha})`;
+};
 
 // `dates` carry the dataset's UTC calendar date in their LOCAL fields (see
 // toDisplayDate in main.js), so the day has to be read off those. toISOString()
@@ -108,6 +115,7 @@ export function renderTimeseriesChart({
   longName,
   units = "cm",
   valueLabel = "Liquid Water Equivalent",
+  color = DEFAULT_LINE_COLOR,
   fileStem,
 }) {
   const line = [];
@@ -167,7 +175,7 @@ export function renderTimeseriesChart({
         data: upper,
         borderWidth: 0,
         pointRadius: 0,
-        backgroundColor: BAND_COLOR,
+        backgroundColor: withAlpha(color, 0.25),
         fill: {target: 1},
         order: 1,
       },
@@ -184,7 +192,7 @@ export function renderTimeseriesChart({
   datasets.push({
     label: name,
     data: line,
-    borderColor: LINE_COLOR,
+    borderColor: color,
     borderWidth: 2,
     pointRadius: 0,
     pointHitRadius: 8,

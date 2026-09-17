@@ -37,11 +37,19 @@ const envList = (value, allowed, fallback) => {
 };
 
 // ---- the mapped variables --------------------------------------------------
+// `color` is the time series line for that variable, so switching layers is
+// visible in the chart and not only in its title. Four hues far enough apart to
+// tell at a glance on the panel's dark ground, each picked to suit its quantity
+// where one suggests itself: green for soil, near-white ice for snow.
+//
+// The map's anomaly cells are deliberately not colored from these — they carry
+// the diverging red/blue scale, which is about sign and magnitude rather than
+// about which variable is showing.
 export const VARIABLES = {
-  GWSa: {short: "GWS", longName: "Groundwater Storage Anomaly"},
-  TWSa: {short: "TWS", longName: "Total Water Storage Anomaly"},
-  SMa: {short: "SM", longName: "Soil Moisture Anomaly"},
-  SWEa: {short: "SWE", longName: "Snow Water Equivalent Anomaly"},
+  GWSa: {short: "GWS", longName: "Groundwater Storage Anomaly", color: "#60a5fa"},
+  TWSa: {short: "TWS", longName: "Total Water Storage Anomaly", color: "#a78bfa"},
+  SMa: {short: "SM", longName: "Soil Moisture Anomaly", color: "#34d399"},
+  SWEa: {short: "SWE", longName: "Snow Water Equivalent Anomaly", color: "#e2e8f0"},
 };
 const VARIABLE_KEYS = Object.keys(VARIABLES);
 
