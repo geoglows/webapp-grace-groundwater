@@ -45,11 +45,14 @@ const envList = (value, allowed, fallback) => {
 // The map's anomaly cells are deliberately not colored from these — they carry
 // the diverging red/blue scale, which is about sign and magnitude rather than
 // about which variable is showing.
+// The key is the label: it is what the store calls the array, what the layer
+// dropdown shows in parentheses, and what a CSV column is headed, so the panel
+// and the legend say the same thing as everything else.
 export const VARIABLES = {
-  GWSa: {short: "GWS", longName: "Groundwater Storage Anomaly", color: "#60a5fa"},
-  TWSa: {short: "TWS", longName: "Total Water Storage Anomaly", color: "#fb923c"},
-  SMa: {short: "SM", longName: "Soil Moisture Anomaly", color: "#34d399"},
-  SWEa: {short: "SWE", longName: "Snow Water Equivalent Anomaly", color: "#e2e8f0"},
+  GWSa: {longName: "Groundwater Storage Anomaly", color: "#60a5fa"},
+  TWSa: {longName: "Total Water Storage Anomaly", color: "#fb923c"},
+  SMa: {longName: "Soil Moisture Anomaly", color: "#34d399"},
+  SWEa: {longName: "Snow Water Equivalent Anomaly", color: "#e2e8f0"},
 };
 const VARIABLE_KEYS = Object.keys(VARIABLES);
 

@@ -214,7 +214,7 @@ const syncSettingsControls = () => {
   );
 
   seriesToggles.replaceChildren(
-    ...Object.entries(VARIABLES).map(([key, {short, color}]) => {
+    ...Object.entries(VARIABLES).map(([key, {color}]) => {
       const row = document.createElement("label");
       row.className = "rfs-check";
 
@@ -228,7 +228,7 @@ const syncSettingsControls = () => {
       swatch.style.background = color;
 
       const name = document.createElement("span");
-      name.textContent = short;
+      name.textContent = key;
 
       row.append(box, swatch, name);
       return row;
@@ -1178,10 +1178,10 @@ const main = async ({polygon, zoomTarget}) => {
   };
 
   const seriesFor = (varName) => {
-    const {short, longName, color} = VARIABLES[varName];
+    const {longName, color} = VARIABLES[varName];
     const d = varData[varName];
     return {
-      name: short,
+      name: varName,
       longName,
       color,
       values: d.meanSeries,
