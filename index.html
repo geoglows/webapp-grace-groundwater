@@ -32,6 +32,13 @@
   <div class="rfs-controls">
     <label class="rfs-label" for="variable-select">Displayed layer</label>
     <select id="variable-select" class="rfs-select"></select>
+
+    <!-- One row per variable, built from VARIABLES in main.js. The displayed
+         layer's row is checked and disabled: the chart always includes what the
+         map is showing. -->
+    <p class="rfs-label rfs-label-spaced">Time series</p>
+    <div id="series-toggles" class="rfs-checks"></div>
+
     <div class="rfs-actions">
       <button id="refresh-layers" class="rfs-btn" aria-pressed="true">
         <span data-icon="map" aria-hidden="true"></span>Regions

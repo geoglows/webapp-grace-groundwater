@@ -69,17 +69,33 @@ const withAlpha = (hex, alpha) => {
 const isoDay = (date) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 
-const toCsv = ({dates, values, uncertainty, name}) => {
-  const header = uncertainty ? ["Date", name, `${name}_upper`, `${name}_lower`] : ["Date", name];
+/**
+ * One column per variable, whatever is currently plotted — a file that changes
+ * shape with the chart is a worse record of the region than one that always
+ * says the same thing. Uncertainty columns follow each variable that has them.
+ *
+ * A row survives if any variable has a reading for that month: dropping months
+ * where one variable happens to be missing would silently shorten the others.
+ */
+export const seriesToCsv = ({dates, series}) => {
+  const header = ["Date"];
+  for (const s of series) {
+    header.push(s.name);
+    if (s.uncertainty) header.push(`${s.name}_upper`, `${s.name}_lower`);
+  }
   const rows = [header.join(",")];
   for (let i = 0; i < dates.length; i++) {
-    const center = values[i];
-    if (!Number.isFinite(center)) continue; // missing GRACE months stay out of the file
-    const cells = [isoDay(dates[i]), center];
-    if (uncertainty) {
-      const unc = uncertainty[i];
-      const hasBand = Number.isFinite(unc);
-      cells.push(hasBand ? center + unc : "", hasBand ? center - unc : "");
+    if (!series.some((s) => Number.isFinite(s.values[i]))) continue;
+    const cells = [isoDay(dates[i])];
+    for (const s of series) {
+      const center = s.values[i];
+      const has = Number.isFinite(center);
+      cells.push(has ? center : "");
+      if (s.uncertainty) {
+        const unc = s.uncertainty[i];
+        const band = has && Number.isFinite(unc);
+        cells.push(band ? center + unc : "", band ? center - unc : "");
+      }
     }
     rows.push(cells.join(","));
   }
@@ -97,47 +113,63 @@ const downloadCsv = (csv, filename) => {
 };
 
 /**
- * Render the area-mean time series into `container`, replacing whatever it held.
+ * Render one or more area-mean time series into `container`, replacing whatever
+ * it held.
+ *
+ * `series` is ordered: the first entry is the displayed layer — the variable the
+ * map is showing — and the rest are comparison curves. That first entry is the
+ * only one that can carry an uncertainty band, and only when it is alone:
+ * several translucent bands over each other read as mush rather than as spread,
+ * so a second curve trades the band away for the comparison.
  *
  * `units` and `valueLabel` name the y axis and come from .env (settings.js), so
- * the chart, the color bar, and the map's legend all read the same way.
+ * the chart, the color bar, and the map's legend all read the same way. All four
+ * variables are liquid water equivalent in the same units, which is what lets
+ * them share one axis.
+ *
+ * `getCsv` is called on download and returns the file contents, possibly after
+ * loading variables that are not plotted — see the CSV note in main.js.
  *
  * Returns {setMarker(date), destroy()}. NaN samples (missing GRACE months and
- * the GRACE/GRACE-FO gap) are dropped rather than plotted, so the line bridges
+ * the GRACE/GRACE-FO gap) are dropped rather than plotted, so a line bridges
  * gaps with a straight segment — the same behavior the Plotly version had.
  */
 export function renderTimeseriesChart({
   container,
   dates,
-  values,
-  uncertainty,
-  name,
-  longName,
+  series,
   units = "cm",
   valueLabel = "Liquid Water Equivalent",
-  color = DEFAULT_LINE_COLOR,
   fileStem,
+  getCsv,
 }) {
-  const line = [];
-  const upper = [];
-  const lower = [];
-  for (let i = 0; i < dates.length; i++) {
-    const y = values[i];
-    if (!Number.isFinite(y)) continue;
-    // x MUST be a numeric timestamp, not a Date. `parsing: false` below tells
-    // Chart.js the data is already in the scale's internal format and skips the
-    // parse step that would otherwise convert a Date via the date adapter —
-    // leaving Date objects here makes the time scale's min/max come out NaN and
-    // silently renders an empty plot area.
-    const x = dates[i].getTime();
-    line.push({x, y});
-    const unc = uncertainty?.[i];
-    if (Number.isFinite(unc)) {
-      upper.push({x, y: y + unc});
-      lower.push({x, y: y - unc});
+  const multiple = series.length > 1;
+
+  // x MUST be a numeric timestamp, not a Date. `parsing: false` below tells
+  // Chart.js the data is already in the scale's internal format and skips the
+  // parse step that would otherwise convert a Date via the date adapter —
+  // leaving Date objects here makes the time scale's min/max come out NaN and
+  // silently renders an empty plot area.
+  const points = series.map(({values, uncertainty}, idx) => {
+    const line = [];
+    const upper = [];
+    const lower = [];
+    const wantsBand = idx === 0 && !multiple && uncertainty;
+    for (let i = 0; i < dates.length; i++) {
+      const y = values[i];
+      if (!Number.isFinite(y)) continue;
+      const x = dates[i].getTime();
+      line.push({x, y});
+      if (!wantsBand) continue;
+      const unc = uncertainty[i];
+      if (Number.isFinite(unc)) {
+        upper.push({x, y: y + unc});
+        lower.push({x, y: y - unc});
+      }
     }
-  }
-  const hasBand = upper.length > 0;
+    return {line, upper, lower};
+  });
+  const hasBand = points[0].upper.length > 0;
 
   container.replaceChildren();
   const wrapper = document.createElement("div");
@@ -151,10 +183,21 @@ export function renderTimeseriesChart({
   downloadButton.type = "button";
   downloadButton.className = "ts-download";
   downloadButton.textContent = "Download CSV";
-  downloadButton.title = `Download the plotted ${longName} time series as CSV`;
-  downloadButton.addEventListener("click", () =>
-    downloadCsv(toCsv({dates, values, uncertainty, name}), `${fileStem}_data.csv`),
-  );
+  downloadButton.title = "Download every variable's time series for this region as CSV";
+  downloadButton.addEventListener("click", async () => {
+    // The file covers variables that may never have been plotted, so it can
+    // need a read before it exists. Say so rather than appearing to do nothing.
+    downloadButton.disabled = true;
+    downloadButton.textContent = "Preparing…";
+    try {
+      downloadCsv(await getCsv(), `${fileStem}_data.csv`);
+    } catch (err) {
+      console.error("Could not build the CSV", err);
+    } finally {
+      downloadButton.disabled = false;
+      downloadButton.textContent = "Download CSV";
+    }
+  });
 
   wrapper.append(canvasBox, downloadButton);
   container.append(wrapper);
@@ -169,10 +212,11 @@ export function renderTimeseriesChart({
     // Band drawn as an upper series filled down to the lower series. Chart.js
     // draws datasets in reverse `order`, so the band's higher order puts it
     // behind the line rather than painting over it.
+    const {name, color} = series[0];
     datasets.push(
       {
         label: `${name} Uncertainty`,
-        data: upper,
+        data: points[0].upper,
         borderWidth: 0,
         pointRadius: 0,
         backgroundColor: withAlpha(color, 0.25),
@@ -181,7 +225,7 @@ export function renderTimeseriesChart({
       },
       {
         label: `${name} Uncertainty Lower`,
-        data: lower,
+        data: points[0].lower,
         borderWidth: 0,
         pointRadius: 0,
         fill: false,
@@ -189,15 +233,20 @@ export function renderTimeseriesChart({
       },
     );
   }
-  datasets.push({
-    label: name,
-    data: line,
-    borderColor: color,
-    borderWidth: 2,
-    pointRadius: 0,
-    pointHitRadius: 8,
-    fill: false,
-    order: 0,
+  // The displayed layer is drawn last so it sits on top of the comparisons, and
+  // a touch heavier — it is the one the map and the color bar agree with.
+  const lineStart = datasets.length;
+  series.forEach(({name, color}, idx) => {
+    datasets.push({
+      label: name,
+      data: points[idx].line,
+      borderColor: color ?? DEFAULT_LINE_COLOR,
+      borderWidth: idx === 0 ? 2 : 1.5,
+      pointRadius: 0,
+      pointHitRadius: 8,
+      fill: false,
+      order: 0,
+    });
   });
 
   const chart = new Chart(canvas, {
@@ -233,17 +282,28 @@ export function renderTimeseriesChart({
       plugins: {
         title: {
           display: true,
-          text: `${longName} Time Series${hasBand ? " and Uncertainty" : ""}`,
+          // One variable names itself; several are only their shared quantity.
+          text: multiple
+            ? `${valueLabel} Time Series`
+            : `${series[0].longName} Time Series${hasBand ? " and Uncertainty" : ""}`,
           color: titleText,
           font: {size: 14, weight: "bold"},
         },
-        legend: {display: false},
+        // With one curve the title already says which variable it is; with
+        // several the legend is the only thing that does.
+        legend: {
+          display: multiple,
+          position: "bottom",
+          labels: {color: axisText, boxWidth: 12, boxHeight: 2, font: {size: 11}},
+          // The band's two datasets have no meaning of their own to show.
+          filter: (item) => item.datasetIndex >= lineStart,
+        },
         tooltip: {
-          // Only the line carries a meaningful reading; the two band series
-          // would otherwise add two noise rows to every tooltip.
-          filter: (item) => item.datasetIndex === datasets.length - 1,
+          // Only the lines carry a meaningful reading; the band series would
+          // otherwise add two noise rows to every tooltip.
+          filter: (item) => item.datasetIndex >= lineStart,
           callbacks: {
-            label: (item) => `${name}: ${item.parsed.y.toFixed(2)} ${units}`,
+            label: (item) => `${item.dataset.label}: ${item.parsed.y.toFixed(2)} ${units}`,
           },
         },
       },

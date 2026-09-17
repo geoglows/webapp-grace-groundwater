@@ -470,3 +470,53 @@ body.panel-resizing * {
     cursor: default;
     opacity: 0.5;
 }
+
+/* ── Time series variable toggles ───────────────────────────────────────────
+   Which curves the chart carries, independent of the raster the dropdown
+   picks. The displayed layer's row is disabled rather than hidden, so the rule
+   that it is always plotted is visible instead of implied. */
+.rfs-label-spaced {
+    margin-top: 14px;
+}
+
+.rfs-checks {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.rfs-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 2px;
+    font-size: 13px;
+    color: var(--text-dim);
+    cursor: pointer;
+}
+
+.rfs-check input {
+    height: 15px;
+    width: 15px;
+    flex-shrink: 0;
+    cursor: pointer;
+    accent-color: var(--accent);
+}
+
+.rfs-check:has(input:disabled) {
+    cursor: default;
+    color: var(--text-faint);
+}
+
+.rfs-check:has(input:disabled) input {
+    cursor: default;
+}
+
+/* The swatch is the chart line's own color, so the panel and the plot name the
+   same variable the same way. */
+.rfs-check-swatch {
+    height: 3px;
+    width: 14px;
+    flex-shrink: 0;
+    border-radius: 2px;
+}

@@ -42,7 +42,7 @@ import {
   VARIABLES,
 } from "./settings.js";
 import {initPanelSplitter} from "./splitPanels.js";
-import {renderTimeseriesChart} from "./timeseriesChart.js";
+import {renderTimeseriesChart, seriesToCsv} from "./timeseriesChart.js";
 import {openZarrArray} from "./zarrStore.js";
 
 hydrateIcons();  // heroicons
@@ -51,6 +51,19 @@ hydrateIcons();  // heroicons
 // as %VITE_*% template strings that Vite substitutes at build time.
 
 const displayConfig = {...DISPLAY_DEFAULTS};
+
+// Variables the user has added to the chart beyond the displayed layer, which is
+// always plotted. A display preference like the palette: it outlives one region
+// and follows the user to the next.
+const extraSeries = new Set();
+
+// The displayed layer first — renderTimeseriesChart treats that position as the
+// one the map agrees with — then the extras in the order VARIABLES declares, so
+// the legend does not reshuffle as they are toggled.
+const plottedVariables = () => [
+  displayConfig.variable,
+  ...Object.keys(VARIABLES).filter((k) => k !== displayConfig.variable && extraSeries.has(k)),
+];
 
 // Generate color stops scaled to max value (dynamic or fixed based on toggle)
 const generateStops = () => {
@@ -146,6 +159,7 @@ const borderWidthValue = document.getElementById("border-width-value");
 const dynamicScaleToggle = document.getElementById("dynamic-scale-toggle");
 const dynamicScaleNote = document.getElementById("dynamic-scale-note");
 const legendToggle = document.getElementById("legend-toggle");
+const seriesToggles = document.getElementById("series-toggles");
 const regionList = document.getElementById("region-list");
 const regionFilter = document.getElementById("region-filter");
 const breadcrumb = document.getElementById("breadcrumb");
@@ -199,6 +213,28 @@ const syncSettingsControls = () => {
     }),
   );
 
+  seriesToggles.replaceChildren(
+    ...Object.entries(VARIABLES).map(([key, {short, color}]) => {
+      const row = document.createElement("label");
+      row.className = "rfs-check";
+
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.value = key;
+      box.dataset.series = key;
+
+      const swatch = document.createElement("span");
+      swatch.className = "rfs-check-swatch";
+      swatch.style.background = color;
+
+      const name = document.createElement("span");
+      name.textContent = short;
+
+      row.append(box, swatch, name);
+      return row;
+    }),
+  );
+
   opacitySlider.value = String(displayConfig.opacity);
   opacityValue.textContent = `${Math.round(displayConfig.opacity * 100)}%`;
   borderToggle.checked = displayConfig.showBorders;
@@ -213,6 +249,18 @@ const syncSettingsControls = () => {
   dynamicScaleToggle.checked = displayConfig.dynamicColorScale;
   // The fixed range is configurable, so the sentence explaining it has to be too.
   dynamicScaleNote.textContent = `When enabled, the color scale fits the actual min/max values in the selected region, with 0 always shown as the center color. When disabled, uses a fixed range of -${displayConfig.fixedMaxValue} to +${displayConfig.fixedMaxValue} ${UNITS}.`;
+};
+
+// The displayed layer is checked and locked: the chart always carries what the
+// map is showing, and a box that could turn it off would be lying.
+const syncSeriesToggles = () => {
+  for (const box of seriesToggles.querySelectorAll("[data-series]")) {
+    const key = box.dataset.series;
+    const isDisplayed = key === displayConfig.variable;
+    box.checked = isDisplayed || extraSeries.has(key);
+    box.disabled = isDisplayed;
+    box.title = isDisplayed ? "The displayed layer is always plotted" : "";
+  }
 };
 
 // Which of the two resolutions the app is currently reading. Every zarr read,
@@ -670,6 +718,9 @@ let timeStepHandler = null;
 // the already-fetched data when the GWSa/TWSa toggle flips. Null while no
 // regional analysis is showing (the toggle then only updates displayConfig).
 let regionalVariableHandler = null;
+// Redraws the chart alone, for a comparison curve being toggled: the raster and
+// the color bar are unaffected by which curves the chart carries.
+let regionalSeriesHandler = null;
 // Bumped whenever any analysis (regional or global) starts or the app resets,
 // so an in-flight regional run abandons before mutating shared UI state.
 let analysisRunSeq = 0;
@@ -952,6 +1003,7 @@ const main = async ({polygon, zoomTarget}) => {
   lastAnalyzedPolygon = polygon;
   const runId = ++analysisRunSeq;
   regionalVariableHandler = null; // reinstalled once this run's data is ready
+  regionalSeriesHandler = null;
   await ensureTimeDates();
   const {lat, lon} = await ensureCoords();
   await arcgisMap.map.when();
@@ -1089,24 +1141,54 @@ const main = async ({polygon, zoomTarget}) => {
     return varData[varName];
   };
 
-  // Generate the timeseries plot for the displayed variable (re-run on toggle)
-  const plotTimeseries = () => {
-    const varName = displayConfig.variable;
+  const seriesFor = (varName) => {
     const {short, longName, color} = VARIABLES[varName];
     const d = varData[varName];
+    return {
+      name: short,
+      longName,
+      color,
+      values: d.meanSeries,
+      uncertainty: d.uncMeanSeries, // null when the store has no <var>_unc array
+    };
+  };
+
+  // Draw the displayed layer plus whatever comparisons are toggled on. Each is
+  // loaded on demand and memoized for this analysis, so a variable toggled off
+  // and on again costs nothing the second time.
+  const plotTimeseries = async () => {
+    const wanted = plottedVariables();
+    const runId = analysisRunSeq;
+    await Promise.all(wanted.map((v) => loadVarData(v).catch((err) => {
+      // One comparison that cannot be read should not take the chart down with
+      // it; it is dropped below and the rest are drawn.
+      console.error(`Could not load the ${v} time series`, err);
+    })));
+    if (runId !== analysisRunSeq) return; // a newer analysis or reset took over
+
+    const series = wanted.filter((v) => varData[v]?.hasData).map(seriesFor);
+    if (!series.length) return;
     activeChart?.destroy();
     activeChart = renderTimeseriesChart({
       container: timeseriesPlotDiv,
       dates: timeDates,
-      values: d.meanSeries,
-      uncertainty: d.uncMeanSeries, // null when the store has no <var>_unc array
-      name: short,
-      longName,
+      series,
       units: UNITS,
       valueLabel: VALUE_LABEL,
-      color,
-      fileStem: `grace_${varName.toLowerCase()}`,
+      fileStem: `grace_${displayConfig.variable.toLowerCase()}`,
+      // Every variable, not only the plotted ones: a file whose columns depend
+      // on what happened to be toggled is a poor record of the region. The ones
+      // never plotted are read here, on the first download that needs them.
+      getCsv: async () => {
+        const all = Object.keys(VARIABLES);
+        await Promise.all(all.map((v) => loadVarData(v).catch(() => null)));
+        return seriesToCsv({
+          dates: timeDates,
+          series: all.filter((v) => varData[v]?.hasData).map(seriesFor),
+        });
+      },
     });
+    activeChart.setMarker(timeControl?.currentDate ?? null);
   };
 
   // ---- Create the cell source; `anomaly` carries whichever variable is displayed ----
@@ -1257,6 +1339,7 @@ const main = async ({polygon, zoomTarget}) => {
   };
 
   regionalVariableHandler = () => renderVariable({keepSlider: true});
+  regionalSeriesHandler = () => plotTimeseries();
 
   // initial draw
   await renderVariable({keepSlider: false});
@@ -1268,6 +1351,7 @@ const resetLayers = () => {
   setBreadcrumb(null);
   analysisRunSeq++; // abandon any in-flight regional analysis
   regionalVariableHandler = null;
+  regionalSeriesHandler = null;
   lastAnalyzedPolygon = null;
   drawLayer.removeAll();
   boundaryLayer.visible = true;
@@ -1454,6 +1538,18 @@ const bootMapUi = async () => {
 
   regionFilter.addEventListener("input", applyRegionFilter);
 
+  // Comparison curves. Only the chart changes, so this asks for a redraw of the
+  // chart rather than of the whole analysis. With no analysis showing there is
+  // nothing to redraw and the choice is simply remembered for the next one.
+  syncSeriesToggles();
+  seriesToggles.addEventListener("change", (e) => {
+    const key = e.target.dataset?.series;
+    if (!key) return;
+    if (e.target.checked) extraSeries.add(key);
+    else extraSeries.delete(key);
+    regionalSeriesHandler?.();
+  });
+
   document
     .querySelector("#global-view-button")
     .addEventListener("click", () => analyzeGlobalView());
@@ -1462,6 +1558,7 @@ const bootMapUi = async () => {
   // selected variable.
   variableSelect.addEventListener("change", () => {
     displayConfig.variable = variableSelect.value;
+    syncSeriesToggles(); // the lock moves with the displayed layer
     if (globalView.active) analyzeGlobalView({keepView: true});
     else regionalVariableHandler?.();
     // neither view active (instructions showing): the next analysis picks it up
