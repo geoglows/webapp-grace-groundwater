@@ -159,11 +159,20 @@ export function renderTimeseriesChart({
     for (let i = 0; i < dates.length; i++) {
       const y = values[i];
       const x = dates[i].getTime();
+      // A null y is what breaks a line in Chart.js. Carried only when the gaps
+      // are meant to show: dropping the point entirely is what makes the
+      // neighbours join up, so `fillGaps` is the choice between the two. The
+      // band is two more lines and has to break at the same months, or it spans
+      // a gap the line it belongs to does not.
+      const gap = () => {
+        line.push({x, y: null});
+        if (wantsBand) {
+          upper.push({x, y: null});
+          lower.push({x, y: null});
+        }
+      };
       if (!Number.isFinite(y)) {
-        // A null y is what breaks the line in Chart.js. Carried only when the
-        // gaps are meant to show: dropping the point entirely is what makes the
-        // neighbours join up, so `fillGaps` is the choice between the two.
-        if (!fillGaps) line.push({x, y: null});
+        if (!fillGaps) gap();
         continue;
       }
       line.push({x, y});
@@ -172,11 +181,17 @@ export function renderTimeseriesChart({
       if (Number.isFinite(unc)) {
         upper.push({x, y: y + unc});
         lower.push({x, y: y - unc});
+      } else if (!fillGaps) {
+        // A month with a reading but no uncertainty: the line goes on, the band
+        // does not.
+        upper.push({x, y: null});
+        lower.push({x, y: null});
       }
     }
     return {line, upper, lower};
   });
-  const hasBand = points[0].upper.length > 0;
+  // Nulls count toward length, so an all-null band would pass a length check.
+  const hasBand = points[0].upper.some((p) => p.y !== null);
 
   container.replaceChildren();
   const wrapper = document.createElement("div");
