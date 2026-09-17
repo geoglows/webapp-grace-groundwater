@@ -570,3 +570,116 @@ body.panel-resizing * {
     width: 100%;
     margin-top: 6px;
 }
+
+/* ── Modals ─────────────────────────────────────────────────────────────────
+   These sit in the page rather than in the map's shadow DOM, so unlike the
+   overlays they can use these rules directly. The Tailwind utilities left on
+   them are layout only; every color comes from here. */
+.rfs-modal {
+    color-scheme: dark;
+    font-family: "Open Sans", "Segoe UI", system-ui, sans-serif;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.rfs-modal-title {
+    color: var(--accent);
+    letter-spacing: -0.015em;
+}
+
+.rfs-modal-rule {
+    border: 0;
+    border-top: 1px solid var(--border);
+}
+
+.rfs-modal-heading {
+    color: var(--text);
+}
+
+.rfs-modal-note {
+    color: var(--text-faint);
+}
+
+.rfs-modal-value {
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+}
+
+.rfs-modal-check {
+    flex-shrink: 0;
+    cursor: pointer;
+    accent-color: var(--accent);
+}
+
+/* ── Modal buttons ── */
+.rfs-modal-primary,
+.rfs-modal-danger,
+.rfs-modal-secondary {
+    font: inherit;
+    font-weight: 600;
+    border-radius: var(--r-md);
+    cursor: pointer;
+    transition: 0.12s;
+}
+
+.rfs-modal-primary {
+    color: var(--on-accent);
+    background: var(--accent);
+    border: 1px solid var(--accent);
+}
+
+.rfs-modal-primary:hover {
+    filter: brightness(1.1);
+}
+
+.rfs-modal-secondary {
+    color: var(--text-dim);
+    background: var(--bg);
+    border: 1px solid var(--border);
+}
+
+.rfs-modal-secondary:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+/* Destructive, so it keeps red rather than taking the accent — the one button
+   here whose color is a warning rather than a style. */
+.rfs-modal-danger {
+    color: #fff;
+    background: #b91c1c;
+    border: 1px solid #ef4444;
+}
+
+.rfs-modal-danger:hover:not(:disabled) {
+    background: #dc2626;
+}
+
+.rfs-modal-danger:disabled {
+    cursor: default;
+    opacity: 0.45;
+}
+
+/* ── Upload modal's drop zone ── */
+.rfs-dropzone {
+    border: 2px dashed var(--border);
+    border-radius: var(--r-lg);
+    background: var(--bg);
+    transition: 0.12s;
+}
+
+.rfs-dropzone:hover,
+.rfs-dropzone[data-drag="true"] {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+}
+
+.rfs-file-chip {
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: var(--r-md);
+    color: var(--text);
+}

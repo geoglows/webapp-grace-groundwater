@@ -13,7 +13,7 @@
   </script>
   <script type="module" src="/src/main.js" defer></script>
 </head>
-<body class="flex h-full overflow-hidden bg-neutral-100 font-sans">
+<body class="flex h-full overflow-hidden bg-[var(--bg)] font-sans">
 <!-- data-theme is what @geoglows/geoglows-auth keys its dark styling off, so the
      account menu opens in the panel's colors rather than white. -->
 <aside class="rfs-panel flex w-80 shrink-0 flex-col" data-theme="dark">
@@ -421,99 +421,98 @@
 </div>
 
 
-<div id="settings-modal" class="fixed inset-0 z-1000 hidden overflow-y-auto bg-black/50">
-  <div class="mx-auto my-[5vh] w-[85%] max-w-[500px] rounded-lg border border-neutral-500 bg-neutral-50 p-5">
-    <h2 class="text-2xl font-bold text-neutral-900">Display Settings</h2>
-    <hr class="my-4 border-t border-neutral-300"/>
+<div id="settings-modal" class="fixed inset-0 z-1000 hidden overflow-y-auto bg-black/60">
+  <div class="rfs-modal mx-auto my-[5vh] w-[85%] max-w-[500px] p-5">
+    <h2 class="rfs-modal-title text-2xl font-bold">Display Settings</h2>
+    <hr class="rfs-modal-rule my-4"/>
 
     <div class="mb-6">
-      <h3 class="mb-3 text-base font-bold text-neutral-800">GRACE Mascon Footprints</h3>
+      <h3 class="rfs-modal-heading mb-3 text-base font-bold">GRACE Mascon Footprints</h3>
       <div class="mb-3 flex items-center gap-3">
         <label for="mascon-width" class="min-w-[120px] text-sm">Boundary width</label>
-        <input type="range" id="mascon-width" min="0.5" max="3" step="0.25" class="max-w-[150px] flex-1 cursor-pointer accent-sky-700">
-        <span id="mascon-width-value" class="min-w-[40px] text-sm text-neutral-600"></span>
+        <input type="range" id="mascon-width" min="0.5" max="3" step="0.25" class="rfs-range max-w-[150px] flex-1">
+        <span id="mascon-width-value" class="rfs-modal-value min-w-[40px] text-sm"></span>
       </div>
-      <p class="mb-3 text-[13px] text-neutral-600">
+      <p class="rfs-modal-note mb-3 text-[13px]">
         GRACE is originally provided on 3 degree cells known as mascons before being downscaled to 1.0 and 0.5 degree anomaly cells.
       </p>
     </div>
 
     <div class="mb-6">
-      <h3 class="mb-3 text-base font-bold text-neutral-800">Anomaly Cell Boundaries</h3>
+      <h3 class="rfs-modal-heading mb-3 text-base font-bold">Anomaly Cell Boundaries</h3>
       <div class="mb-3 flex items-center gap-3">
         <label for="border-width" class="min-w-[120px] text-sm">Boundary width</label>
         <input type="range" id="border-width" min="0.5" max="3" step="0.5"
-               class="max-w-[150px] flex-1 cursor-pointer accent-sky-700">
-        <span id="border-width-value" class="min-w-[40px] text-sm text-neutral-600"></span>
+               class="rfs-range max-w-[150px] flex-1">
+        <span id="border-width-value" class="rfs-modal-value min-w-[40px] text-sm"></span>
       </div>
     </div>
 
     <div class="mb-6">
-      <h3 class="mb-3 text-base font-bold text-neutral-800">Color Bar</h3>
+      <h3 class="rfs-modal-heading mb-3 text-base font-bold">Color Bar</h3>
       <div class="mb-3 flex items-center gap-3">
         <label for="legend-toggle" class="min-w-[120px] text-sm">Show color bar on map</label>
-        <input type="checkbox" id="legend-toggle" class="size-[18px] cursor-pointer accent-sky-700">
+        <input type="checkbox" id="legend-toggle" class="rfs-modal-check size-[18px]">
       </div>
       <div class="mb-3 flex items-center gap-3">
         <label for="dynamic-scale-toggle" class="min-w-[120px] text-sm">Dynamic scale (fit to data)</label>
-        <input type="checkbox" id="dynamic-scale-toggle" class="size-[18px] cursor-pointer accent-sky-700">
+        <input type="checkbox" id="dynamic-scale-toggle" class="rfs-modal-check size-[18px]">
       </div>
-      <p id="dynamic-scale-note" class="mb-3 text-[13px] text-neutral-600">When enabled, the color scale fits the actual
+      <p id="dynamic-scale-note" class="rfs-modal-note mb-3 text-[13px]">When enabled, the color scale fits the actual
                                                                           min/max values in the selected region, with 0 always shown as the center color.</p>
     </div>
 
     <div class="mb-6">
-      <h3 class="mb-3 text-base font-bold text-neutral-800">Cache</h3>
-      <p class="mb-3 text-[13px] text-neutral-600">Delete all locally cached data (coordinates and the global animation). The next page refresh will reload everything from the network, simulating a first visit.</p>
+      <h3 class="rfs-modal-heading mb-3 text-base font-bold">Cache</h3>
+      <p class="rfs-modal-note mb-3 text-[13px]">Delete all locally cached data (coordinates and the global animation). The next page refresh will reload everything from the network, simulating a first visit.</p>
       <div class="mb-3 flex items-center gap-3">
-        <button id="clear-cache-button" class="cursor-pointer rounded border border-red-800 bg-red-600 px-4 py-2 text-sm text-white transition hover:bg-red-800 disabled:cursor-default disabled:border-red-300 disabled:bg-red-300">
+        <button id="clear-cache-button" class="rfs-modal-danger px-4 py-2 text-sm">
           Clear cached data
         </button>
-        <span id="clear-cache-status" class="text-[13px] text-neutral-600"></span>
+        <span id="clear-cache-status" class="rfs-modal-note text-[13px]"></span>
       </div>
     </div>
 
     <div class="mt-5 flex justify-end gap-2.5">
-      <button id="settings-close" class="cursor-pointer rounded border border-neutral-300 bg-sky-700 px-5 py-2 text-sm text-white transition hover:bg-sky-800">
+      <button id="settings-close" class="rfs-modal-primary px-5 py-2 text-sm">
         Close
       </button>
     </div>
   </div>
 </div>
 
-<div id="upload-modal" class="fixed inset-0 z-1000 hidden overflow-y-auto bg-black/50">
-  <div class="mx-auto my-[5vh] w-[85%] max-w-[500px] rounded-lg border border-neutral-500 bg-neutral-50 p-5">
-    <h2 class="text-2xl font-bold text-neutral-900">Upload Region</h2>
-    <p class="mb-3 text-[13px] text-neutral-600">Upload a GeoJSON file containing polygon geometries to analyze GRACE groundwater data within the region boundary.</p>
-    <hr class="my-4 border-t border-neutral-300"/>
+<div id="upload-modal" class="fixed inset-0 z-1000 hidden overflow-y-auto bg-black/60">
+  <div class="rfs-modal mx-auto my-[5vh] w-[85%] max-w-[500px] p-5">
+    <h2 class="rfs-modal-title text-2xl font-bold">Upload Region</h2>
+    <p class="rfs-modal-note mb-3 text-[13px]">Upload a GeoJSON file containing polygon geometries to analyze GRACE groundwater data within the region boundary.</p>
+    <hr class="rfs-modal-rule my-4"/>
     <div id="upload-drop-zone"
-         class="my-4 cursor-pointer rounded-lg border-2 border-dashed border-neutral-300 px-5 py-10 text-center transition hover:border-sky-700 hover:bg-sky-50 data-[drag=true]:border-sky-700 data-[drag=true]:bg-sky-50">
-      <span data-icon="cloud-arrow-up" class="mx-auto mb-2 block size-8 text-neutral-400" aria-hidden="true"></span>
-      <p class="my-1 text-neutral-600">Drag and drop a GeoJSON file here</p>
-      <p class="my-1 text-[13px] text-neutral-600">or</p>
-      <button id="upload-browse-button"
-              class="my-2 cursor-pointer rounded border border-sky-700 bg-white px-5 py-2 text-sm text-sky-700 transition hover:bg-sky-50">
+         class="rfs-dropzone my-4 cursor-pointer px-5 py-10 text-center">
+      <span data-icon="cloud-arrow-up" class="mx-auto mb-2 block size-8 text-[var(--text-faint)]" aria-hidden="true"></span>
+      <p class="my-1 text-[var(--text-dim)]">Drag and drop a GeoJSON file here</p>
+      <p class="rfs-modal-note my-1 text-[13px]">or</p>
+      <button id="upload-browse-button" class="rfs-modal-secondary my-2 px-5 py-2 text-sm">
         Browse Files
       </button>
       <input type="file" id="upload-file-input" accept=".geojson,.json" hidden>
-      <p class="mt-2 text-xs text-neutral-400">.geojson or .json files accepted</p>
+      <p class="rfs-modal-note mt-2 text-xs">.geojson or .json files accepted</p>
     </div>
 
     <div id="upload-file-info"
-         class="my-3 flex hidden items-center justify-between rounded-md border border-sky-700 bg-sky-50 px-3.5 py-2.5 text-sm text-neutral-800">
+         class="rfs-file-chip my-3 flex hidden items-center justify-between px-3.5 py-2.5 text-sm">
       <span id="upload-file-name"></span>
-      <button id="upload-clear-file" title="Remove file" class="cursor-pointer text-neutral-400 transition hover:text-red-600">
+      <button id="upload-clear-file" title="Remove file" class="cursor-pointer text-[var(--text-faint)] transition hover:text-red-400">
         <span data-icon="x-mark" class="block size-5" aria-hidden="true"></span>
       </button>
     </div>
 
-    <div id="upload-error" class="my-3 hidden rounded-md border border-red-600 bg-red-50 px-3.5 py-2.5 text-[13px] text-red-600"></div>
+    <div id="upload-error" class="my-3 hidden rounded-md border border-red-500/60 bg-red-500/10 px-3.5 py-2.5 text-[13px] text-red-300"></div>
 
     <div class="mt-5 flex justify-end gap-2.5">
-      <button id="upload-cancel" class="cursor-pointer rounded border border-neutral-300 bg-white px-5 py-2 text-sm text-neutral-800 transition hover:bg-neutral-100">
+      <button id="upload-cancel" class="rfs-modal-secondary px-5 py-2 text-sm">
         Cancel
       </button>
-      <button id="upload-submit" disabled class="cursor-pointer rounded border border-neutral-300 bg-sky-700 px-5 py-2 text-sm text-white transition hover:bg-sky-800 disabled:cursor-not-allowed disabled:bg-neutral-300">
+      <button id="upload-submit" disabled class="rfs-modal-primary px-5 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-45">
         Analyze
       </button>
     </div>
