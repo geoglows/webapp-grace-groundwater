@@ -568,18 +568,22 @@ const masconRenderer = () => ({
   symbol: {
     type: "simple-fill",
     color: [255, 255, 255, 0],
-    // Dashed, because the anomaly cell boundaries are solid lines of much the
-    // same weight and color: with both layers on, two solid grids at different
-    // spacings are hard to tell apart, and telling them apart is the only
-    // reason to show the mascons at all. Dashes also read as the softer
-    // statement — a cell edge is where the data changes, a mascon edge is where
-    // the measurement behind it changes.
+    // Solid, and a color of its own. Dashes were tried and could not work here:
+    // this is a mesh of 1706 polygons that tile the globe, so every interior
+    // edge belongs to two mascons and gets stroked twice. Solid, the second pass
+    // lands invisibly on the first; dashed, each ring starts its dash pattern at
+    // its own first vertex, so the two passes fall out of phase and the shared
+    // edge comes out as ragged overlapping dashes.
     //
-    // Near-black is invisible on imagery, so it inverts to near-white there.
+    // Hue is what separates these from the anomaly cell boundaries instead. The
+    // two grids are nested — 3 degree caps aligned to the 0.5 degree graticule —
+    // so a mascon edge always lies along a cell edge and can never be told apart
+    // by position. Fuchsia because nothing else on the map uses it: the cell
+    // borders are black or white, the regions blue or amber, a drawn polygon
+    // cyan.
     outline: {
-      color: darkBasemap ? [235, 235, 235, 0.85] : [38, 38, 38, 0.8],
+      color: darkBasemap ? [240, 171, 252, 0.95] : [192, 38, 211, 0.9],
       width: displayConfig.masconWidth,
-      style: "dash",
     },
   }
 });
@@ -1258,9 +1262,9 @@ const main = async ({polygon, zoomTarget}) => {
       type: "simple",
       symbol: {
         type: "simple-fill",
-        // Solid, and the mascon outlines above are dashed, so the two grids
-        // stay distinguishable when both are on. Black over a pale basemap,
-        // white over imagery, for the same reason the region outlines switch.
+        // Black over a pale basemap, white over imagery, for the same reason
+        // the region outlines switch. The mascon outlines take a hue of their
+        // own so the two grids stay apart where their edges coincide.
         outline: displayConfig.showBorders
           ? {color: darkBasemap ? [255, 255, 255, 0.85] : [0, 0, 0, 1], width: displayConfig.borderWidth}
           : {color: [0, 0, 0, 0], width: 0}
@@ -1712,9 +1716,9 @@ const bootMapUi = async () => {
       type: "simple",
       symbol: {
         type: "simple-fill",
-        // Solid, and the mascon outlines above are dashed, so the two grids
-        // stay distinguishable when both are on. Black over a pale basemap,
-        // white over imagery, for the same reason the region outlines switch.
+        // Black over a pale basemap, white over imagery, for the same reason
+        // the region outlines switch. The mascon outlines take a hue of their
+        // own so the two grids stay apart where their edges coincide.
         outline: displayConfig.showBorders
           ? {color: darkBasemap ? [255, 255, 255, 0.85] : [0, 0, 0, 1], width: displayConfig.borderWidth}
           : {color: [0, 0, 0, 0], width: 0}
