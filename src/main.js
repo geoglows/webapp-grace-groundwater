@@ -34,7 +34,6 @@ import {
   DEFAULT_VIEW,
   DISPLAY_DEFAULTS,
   TREND_MIN_MONTHS,
-  TREND_SCALE_MAX,
   TREND_THRESHOLDS,
   GLOBAL_PLAY_RATE_MS,
   MAP_BASEMAP,
@@ -94,8 +93,34 @@ const generateStops = () => {
   return stopsFor(maxVal, UNITS);
 };
 
-// The trend map's own scale, in units per year rather than units.
-const trendStops = () => stopsFor(TREND_SCALE_MAX, `${UNITS}/yr`, {decimals: 1});
+/**
+ * Stops that draw the five trend categories as flat bands rather than a ramp,
+ * so the global per-cell map uses the same colors and the same class boundaries
+ * as the region classification.
+ *
+ * buildLut interpolates between adjacent stops, so each boundary gets a pair a
+ * hair apart: the band's color right up to the threshold, the next band's color
+ * immediately after. Beyond the outermost stops the lookup clamps, which is
+ * what gives the two "extreme" classes their open ends.
+ */
+const trendCategoryStops = () => {
+  const {moderate, extreme} = TREND_THRESHOLDS;
+  const color = (key) => TREND_CATEGORIES.find((c) => c.key === key).color;
+  const EPS = 1e-4;
+  const outer = extreme * 1.5; // anything past this clamps to the extreme color
+  return [
+    {value: -outer, color: color("extreme-decline")},
+    {value: -extreme, color: color("extreme-decline")},
+    {value: -extreme + EPS, color: color("decline")},
+    {value: -moderate, color: color("decline")},
+    {value: -moderate + EPS, color: color("static")},
+    {value: moderate, color: color("static")},
+    {value: moderate + EPS, color: color("increase")},
+    {value: extreme, color: color("increase")},
+    {value: extreme + EPS, color: color("extreme-increase")},
+    {value: outer, color: color("extreme-increase")},
+  ];
+};
 
 // Map elements
 const arcgisMap = document.querySelector("arcgis-map");
@@ -561,13 +586,25 @@ const ensureRegionRings = () => {
   return regionRingsPromise;
 };
 
-const renderTrendLegend = (varName) => {
+// How many cells fell in each class. Land only: a NaN slope is ocean or a cell
+// with too few months, and neither is a classification.
+const countCellCategories = (slopes) => {
+  const counts = new Map();
+  for (let i = 0; i < slopes.length; i++) {
+    const s = slopes[i];
+    if (!Number.isFinite(s)) continue;
+    const key = classify(s, TREND_THRESHOLDS).key;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+};
+
+// Shared by both modes: the region classification counts regions, the global
+// map counts cells, and the classes are the same either way.
+const renderTrendLegend = ({varName, counts, noun}) => {
   const {moderate, extreme} = TREND_THRESHOLDS;
   trendLegendTitle.textContent = `${varName} trend (${UNITS}/yr)`;
-  trendLegendSub.textContent = `thresholds ±${moderate} and ±${extreme} ${UNITS}/yr`;
-
-  const counts = new Map();
-  for (const cat of trendState.byRegion.values()) counts.set(cat.key, (counts.get(cat.key) ?? 0) + 1);
+  trendLegendSub.textContent = `${noun} · thresholds ±${moderate} and ±${extreme}`;
 
   // Increase at the top, decline at the bottom: the legend reads the way the
   // values do.
@@ -662,7 +699,7 @@ const runGlobalTrends = async () => {
     if (!globalView.active || displayConfig.variable !== varName) return;
 
     const {latEdgeMin, cellSize} = globalView.geo[resolutionOf(varName)];
-    globalView.renderer.setStops(trendStops());
+    globalView.renderer.setStops(trendCategoryStops());
     globalView.renderer.setGrid({frames: slopes, nT: 1, nLat, nLon, latEdgeMin, cellSize});
     // Not this variable's animation grid any more, so re-entering the animation
     // has to rebuild it rather than reuse what is on screen.
@@ -671,12 +708,13 @@ const runGlobalTrends = async () => {
 
     timeStepHandler = null;
     timeControl?.hide();
-    updateMapLegend({
-      stops: trendStops(),
-      unit: `${UNITS}/yr`,
-      title: `${VARIABLES[varName].longName} trend (${UNITS}/yr)`,
-    });
-    setLegendAvailable(true);
+    // The category legend replaces the continuous color bar: the map is five
+    // flat classes now, and a gradient would misdescribe it.
+    setLegendAvailable(false);
+    const counts = countCellCategories(slopes);
+    const classified = [...counts.values()].reduce((a, b) => a + b, 0);
+    renderTrendLegend({varName, counts, noun: `${classified.toLocaleString()} cells`});
+    trendLegendDiv.classList.remove("hidden");
     globalProgressDiv.classList.add("hidden");
 
     trendState.on = true;
@@ -726,7 +764,9 @@ const runTrends = async () => {
     trendState.mode = "region";
     trendState.varName = varName;
     applyTrendRenderer();
-    renderTrendLegend(varName);
+    const counts = new Map();
+    for (const cat of trendState.byRegion.values()) counts.set(cat.key, (counts.get(cat.key) ?? 0) + 1);
+    renderTrendLegend({varName, counts, noun: `${trendState.byRegion.size} regions`});
     trendLegendDiv.classList.remove("hidden");
     trendsButton.setAttribute("aria-pressed", "true");
     trendsLabel.textContent = "Hide trends";
@@ -2124,16 +2164,12 @@ const bootMapUi = async () => {
       // opacity change restyles it without reverting it to anomalies.
       const showingTrends = trendState.on && trendState.mode === "global";
       globalView.renderer.layer.opacity = displayConfig.opacity;
-      globalView.renderer.setStops(showingTrends ? trendStops() : generateStops());
+      globalView.renderer.setStops(showingTrends ? trendCategoryStops() : generateStops());
       globalView.renderer.setBorders({show: displayConfig.showBorders, width: displayConfig.borderWidth});
       globalView.renderer.redraw();
-      updateMapLegend(showingTrends
-        ? {
-          stops: trendStops(),
-          unit: `${UNITS}/yr`,
-          title: `${VARIABLES[displayConfig.variable].longName} trend (${UNITS}/yr)`,
-        }
-        : undefined);
+      // The trend classes are fixed colors, so a palette change leaves them
+      // alone and the category legend already describes them.
+      if (!showingTrends) updateMapLegend();
       return; // no regional feature layer while the global view is active
     }
     const anomalyLayer = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");

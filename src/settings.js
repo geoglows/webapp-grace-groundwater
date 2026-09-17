@@ -211,10 +211,6 @@ export const TREND_THRESHOLDS = {
 // Months a region needs before it is classified rather than called
 // insufficient. GRACE has ~290 months with gaps, so this is a low bar that only
 // excludes regions almost entirely masked out.
-// The +/- range the global per-cell trend map's color scale spans, in cm/year.
-// Independent of the anomaly scale, which is in cm: a trend is a different
-// quantity and would be unreadable on the anomaly range.
-export const TREND_SCALE_MAX = envNumber(import.meta.env.VITE_TREND_SCALE_MAX_CM_PER_YEAR, 2, {min: 0.1});
 export const TREND_MIN_MONTHS = envNumber(import.meta.env.VITE_TREND_MIN_MONTHS, 24, {min: 2});
 
 // ---- time slider -----------------------------------------------------------
