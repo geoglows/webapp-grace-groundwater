@@ -74,11 +74,6 @@
        itself is a custom element whose internals are a shadow root. -->
   <div class="relative flex min-h-0 w-full flex-1">
     <arcgis-map id="region-map" class="min-h-0 w-full flex-1">
-      <!-- Top-left: Navigation -->
-      <arcgis-zoom slot="top-left"></arcgis-zoom>
-      <arcgis-expand slot="top-left" title="Basemap Gallery">
-        <arcgis-basemap-gallery></arcgis-basemap-gallery>
-      </arcgis-expand>
       <arcgis-scale-bar slot="bottom-right" bar-style="line" unit="dual"></arcgis-scale-bar>
     </arcgis-map>
 
@@ -154,6 +149,146 @@
   <div class="global-progress-track">
     <div id="global-progress-fill" class="global-progress-fill"></div>
   </div>
+</div>
+<div id="zoom-control" class="zoom-control absolute">
+  <style>
+      /* Custom properties inherit through the shadow boundary, so the tokens on
+         :root still resolve here even though style.css's selectors do not. */
+      .zoom-control {
+          display: flex;
+          flex-direction: column;
+          background: var(--surface, #111827);
+          border: 1px solid var(--border, #334155);
+          border-radius: var(--r-lg, 8px);
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+          overflow: hidden;
+      }
+
+      .zoom-control button {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          height: 32px;
+          width: 32px;
+          padding: 0;
+          color: var(--text, #f8fafc);
+          background: none;
+          border: 0;
+          cursor: pointer;
+          transition: 0.12s;
+      }
+
+      /* A rule between the two rather than around each: the pair reads as one
+         control, the way the Leaflet stack aquiferx uses does. */
+      .zoom-control button + button {
+          border-top: 1px solid var(--border, #334155);
+      }
+
+      .zoom-control button:hover:not(:disabled) {
+          background: var(--surface2, #1e293b);
+          color: var(--accent, #38bdf8);
+      }
+
+      .zoom-control button:disabled {
+          color: var(--text-faint, #b6c2d3);
+          cursor: default;
+          opacity: 0.45;
+      }
+
+      .zoom-control svg {
+          height: 17px;
+          width: 17px;
+      }
+  </style>
+  <button id="zoom-in" type="button" aria-label="Zoom in">
+    <span data-icon="plus" aria-hidden="true"></span>
+  </button>
+  <button id="zoom-out" type="button" aria-label="Zoom out">
+    <span data-icon="minus" aria-hidden="true"></span>
+  </button>
+</div>
+<div id="basemap-control" class="basemap-control absolute">
+  <style>
+      .basemap-control {
+          position: relative;
+      }
+
+      .basemap-control > button {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          height: 32px;
+          width: 32px;
+          padding: 0;
+          color: var(--text, #f8fafc);
+          background: var(--surface, #111827);
+          border: 1px solid var(--border, #334155);
+          border-radius: var(--r-lg, 8px);
+          box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+          cursor: pointer;
+          transition: 0.12s;
+      }
+
+      .basemap-control > button:hover,
+      .basemap-control > button[aria-expanded="true"] {
+          border-color: var(--accent, #38bdf8);
+          color: var(--accent, #38bdf8);
+      }
+
+      .basemap-control svg {
+          height: 17px;
+          width: 17px;
+      }
+
+      .basemap-menu {
+          position: absolute;
+          top: 0;
+          left: calc(100% + 6px);
+          min-width: 190px;
+          padding: 6px;
+          background: var(--surface, #111827);
+          border: 1px solid var(--border, #334155);
+          border-radius: var(--r-lg, 8px);
+          box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+      }
+
+      .basemap-menu[hidden] {
+          display: none;
+      }
+
+      .basemap-menu button {
+          display: block;
+          width: 100%;
+          padding: 7px 10px;
+          font-family: "Open Sans", "Segoe UI", system-ui, sans-serif;
+          font-size: 13px;
+          text-align: left;
+          white-space: nowrap;
+          color: var(--text-dim, #dde5ee);
+          background: none;
+          border: 1px solid transparent;
+          border-radius: var(--r-md, 6px);
+          cursor: pointer;
+          transition: 0.12s;
+      }
+
+      .basemap-menu button:hover {
+          background: var(--surface2, #1e293b);
+          color: var(--text, #f8fafc);
+      }
+
+      /* The showing basemap is boxed rather than filled: a solid accent row
+         would outweigh every other row in a list this short. */
+      .basemap-menu button[aria-current="true"] {
+          color: var(--accent, #38bdf8);
+          border-color: var(--accent, #38bdf8);
+          font-weight: 600;
+      }
+  </style>
+  <button id="basemap-button" type="button" aria-label="Basemap" aria-expanded="false">
+    <span data-icon="square-3-stack-3d" aria-hidden="true"></span>
+  </button>
+  <div id="basemap-menu" class="basemap-menu" role="menu" hidden></div>
 </div>
 <div id="draw-control" class="draw-control absolute">
   <style>

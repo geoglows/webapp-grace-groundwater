@@ -2,15 +2,13 @@ import "@arcgis/core/assets/esri/themes/light/main.css";
 import "./style.css";
 
 import "@arcgis/map-components/components/arcgis-map";
-import "@arcgis/map-components/components/arcgis-zoom";
 import "@arcgis/map-components/components/arcgis-layer-list";
 import "@arcgis/map-components/components/arcgis-locate";
 import "@arcgis/map-components/components/arcgis-scale-bar";
-import "@arcgis/map-components/components/arcgis-expand";
-import "@arcgis/map-components/components/arcgis-basemap-gallery";
 import GeoJSONLayer from "@arcgis/core/layers/GeoJSONLayer.js";
 import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer.js";
 import SketchViewModel from "@arcgis/core/widgets/Sketch/SketchViewModel.js";
+import * as reactiveUtils from "@arcgis/core/core/reactiveUtils.js";
 import FeatureLayer from "@arcgis/core/layers/FeatureLayer.js";
 import Graphic from "@arcgis/core/Graphic.js";
 import SpatialReference from "@arcgis/core/geometry/SpatialReference.js";
@@ -67,6 +65,19 @@ const generateStops = () => {
 
 // Map elements
 const arcgisMap = document.querySelector("arcgis-map");
+// The basemaps the picker offers, in aquiferx's order and under its names. The
+// ids are ArcGIS's own, so switching is an assignment rather than a tile-layer
+// swap — aquiferx has to name the tile URLs because Leaflet has no equivalent.
+const BASEMAPS = [
+  {id: "osm", label: "OpenStreetMap"},
+  {id: "topo-vector", label: "Topographic (Esri)"},
+  {id: "satellite", label: "Imagery (Esri)"},
+  {id: "streets-vector", label: "Streets (Esri)"},
+  {id: "gray-vector", label: "Light Gray (Esri)"},
+  {id: "dark-gray-vector", label: "Dark Gray (Esri)"},
+  {id: "terrain", label: "Terrain (Esri)"},
+];
+
 // Drawing is a SketchViewModel behind our own button rather than <arcgis-sketch>:
 // the widget's toolbar carried a selection arrow, five polygon drawing modes, an
 // undo/redo pair and a snapping menu, and only the mode picker can't be switched
@@ -79,6 +90,12 @@ const drawnSymbol = {
   color: [56, 189, 248, 0.15],
   outline: {color: [56, 189, 248, 0.9], width: 2},
 };
+const zoomControl = document.getElementById("zoom-control");
+const zoomInButton = document.getElementById("zoom-in");
+const zoomOutButton = document.getElementById("zoom-out");
+const basemapControl = document.getElementById("basemap-control");
+const basemapButton = document.getElementById("basemap-button");
+const basemapMenu = document.getElementById("basemap-menu");
 const drawControl = document.getElementById("draw-control");
 const drawButton = document.getElementById("draw-button");
 const drawLabel = drawButton.querySelector("[data-draw-label]");
@@ -1318,7 +1335,71 @@ const bootMapUi = async () => {
   // order: top-right holds the drawing tools, then the load-progress bar, the
   // shared color bar, and the layer dropdown beneath it; the compact time
   // slider sits bottom-left.
+  arcgisMap.view.ui.add(zoomControl, "top-left");
+  arcgisMap.view.ui.add(basemapControl, "top-left");
   arcgisMap.view.ui.add(drawControl, "top-right");
+
+  // ---- Zoom ----
+  // One LOD per press, which is half a conventional zoom level under the
+  // halfZoomLODs constraint set above — the same step <arcgis-zoom> took.
+  const stepZoom = (delta) => {
+    arcgisMap.view.goTo({zoom: arcgisMap.view.zoom + delta}).catch(() => {});
+  };
+  zoomInButton.addEventListener("click", () => stepZoom(1));
+  zoomOutButton.addEventListener("click", () => stepZoom(-1));
+
+  // Grey the button out at the ends of the LOD range rather than leaving a
+  // press that does nothing.
+  const syncZoomButtons = () => {
+    const {zoom} = arcgisMap.view;
+    zoomInButton.disabled = zoom >= halfZoomLODs.length - 1;
+    zoomOutButton.disabled = zoom <= 0;
+  };
+  reactiveUtils.watch(() => arcgisMap.view.zoom, syncZoomButtons);
+  syncZoomButtons();
+
+  // ---- Basemap ----
+  const basemapButtons = BASEMAPS.map(({id, label}) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.role = "menuitem";
+    button.textContent = label;
+    button.dataset.basemap = id;
+    button.addEventListener("click", () => {
+      arcgisMap.basemap = id;
+      markCurrentBasemap(id);
+      closeBasemapMenu();
+    });
+    return button;
+  });
+  basemapMenu.replaceChildren(...basemapButtons);
+
+  function markCurrentBasemap(id) {
+    for (const button of basemapButtons) {
+      button.setAttribute("aria-current", String(button.dataset.basemap === id));
+    }
+  }
+
+  function closeBasemapMenu() {
+    basemapMenu.hidden = true;
+    basemapButton.setAttribute("aria-expanded", "false");
+  }
+
+  markCurrentBasemap(MAP_BASEMAP);
+
+  basemapButton.addEventListener("click", () => {
+    const opening = basemapMenu.hidden;
+    basemapMenu.hidden = !opening;
+    basemapButton.setAttribute("aria-expanded", String(opening));
+  });
+
+  // Dismiss on a click anywhere else. composedPath rather than contains():
+  // view.ui.add moved this control into the map's shadow DOM, so a document
+  // listener sees the <arcgis-map> host as the target, never the menu itself.
+  document.addEventListener("click", (e) => {
+    if (!basemapMenu.hidden && !e.composedPath().includes(basemapControl)) closeBasemapMenu();
+  });
+  arcgisMap.view.on("click", () => closeBasemapMenu());
   arcgisMap.view.ui.add(globalProgressDiv, "top-right");
   arcgisMap.view.ui.add(mapLegendDiv, "top-right");
 
