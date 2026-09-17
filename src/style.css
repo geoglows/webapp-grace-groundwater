@@ -683,3 +683,53 @@ body.panel-resizing * {
     border-radius: var(--r-md);
     color: var(--text);
 }
+
+/* An uploaded region, in the list and on the map, takes green: the built-in
+   outlines are blue or amber, the mascons fuchsia, a sketch cyan. Panel and map
+   use the same hue so a row and its outline read as the same thing. */
+.rfs-list-item[data-user="true"] {
+    color: #4ade80;
+}
+
+.rfs-list-item[data-user="true"]:hover {
+    color: #86efac;
+}
+
+.rfs-list-item[data-user="true"][aria-current="true"] {
+    border-left-color: #4ade80;
+    color: #86efac;
+}
+
+/* The row is a button, so the remove control is a sibling rather than nested. */
+.rfs-list-row {
+    display: flex;
+    align-items: center;
+}
+
+.rfs-list-row .rfs-list-item {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.rfs-list-remove {
+    flex: 0 0 auto;
+    display: none;
+    padding: 2px 14px 2px 4px;
+    color: var(--text-faint);
+    background: none;
+    border: 0;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.rfs-list-row:hover .rfs-list-remove,
+.rfs-list-remove:focus-visible {
+    display: block;
+}
+
+.rfs-list-remove:hover {
+    color: #f87171;
+}

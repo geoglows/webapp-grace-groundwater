@@ -24,7 +24,9 @@ import {clearCacheDB, getOrFetchCoords} from "./db.js";
 import {loadGlobalVariable} from "./globalFramesClient.js";
 import {createGlobalRenderer} from "./globalLayer.js";
 import {hydrateIcons} from "./icons.js";
+import Polygon from "@arcgis/core/geometry/Polygon.js";
 import {parseGeoJSONFile} from "./polygonUploads.js";
+import {deleteUserRegion, listUserRegions, newUserRegionId, putUserRegion} from "./userRegions.js";
 import {createTimeControl} from "./timeControl.js";
 import {
   COLOR_PALETTES,
@@ -109,6 +111,19 @@ let darkBasemap = isDarkBasemap(MAP_BASEMAP);
 // undo/redo pair and a snapping menu, and only the mode picker can't be switched
 // off through a hide* property. Owning the button is the only way to one button.
 const drawLayer = new GraphicsLayer({title: "User drawn polygons", listMode: "hide"});
+// Uploaded regions live apart from the sketch layer: a sketch is scratch work
+// that the next one replaces, an upload is kept and belongs beside the built-in
+// outlines. resetLayers clears the first and leaves this one alone, which is why
+// an upload used to vanish on the way Home.
+const uploadedLayer = new GraphicsLayer({title: "Uploaded regions", listMode: "hide"});
+
+// Green, so an upload stands apart from the built-in outlines (blue, or amber
+// over imagery) and from a sketch (cyan). The list rows use the same hue.
+const uploadedSymbolFor = (dark) => ({
+  type: "simple-fill",
+  color: dark ? [74, 222, 128, 0.16] : [34, 197, 94, 0.14],
+  outline: {color: dark ? [134, 239, 172, 0.95] : [21, 128, 61, 0.95], width: 1.5},
+});
 // Shared by the sketch and by an uploaded boundary — both are "the polygon this
 // analysis is for", so both are drawn the same way.
 const drawnSymbol = {
@@ -465,6 +480,7 @@ const applyBasemapContrast = (basemapId) => {
   boundaryLayer.renderer = {type: "simple", symbol: regionSymbolFor(darkBasemap)};
   boundaryLayer.labelingInfo = [regionLabelFor(darkBasemap)];
   masconLayer.renderer = masconRenderer();
+  for (const g of uploadedLayer.graphics) g.symbol = uploadedSymbolFor(darkBasemap);
 };
 
 const boundaryLayer = new GeoJSONLayer({
@@ -525,6 +541,49 @@ const setBreadcrumb = (label, {home = true} = {}) => {
   breadcrumb.append(...crumbs);
 };
 
+// One row, built the same way whichever kind of region it is. `user` rows carry
+// their own geometry and a remove control; built-in rows are analyzed by id out
+// of the boundary layer.
+const regionRowElement = (row) => {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "rfs-list-item";
+  button.textContent = row.name;
+  button.title = row.name;
+  button.setAttribute("role", "listitem");
+  button.setAttribute("aria-current", "false");
+  if (row.user) button.dataset.user = "true";
+  button.addEventListener("click", () => {
+    if (row.user) analyzeUserRegion(row);
+    else analyzeGlobalRegion({regionId: row.id, name: row.name});
+  });
+  if (!row.user) return {element: button, button};
+
+  // Uploads accumulate with nothing to remove them otherwise, and this is the
+  // only place they are listed.
+  const wrapper = document.createElement("div");
+  wrapper.className = "rfs-list-row";
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "rfs-list-remove";
+  remove.title = `Remove ${row.name}`;
+  remove.setAttribute("aria-label", `Remove ${row.name}`);
+  remove.textContent = "\u00d7";
+  remove.addEventListener("click", () => removeUserRegion(row.id));
+  wrapper.append(button, remove);
+  return {element: wrapper, button};
+};
+
+// Built-ins first, alphabetically, then the uploads — an upload is the user's
+// own and easier to find at a known end of the list than sorted into 81 others.
+let builtinRows = [];
+let userRows = [];
+const paintRegionList = () => {
+  regionRows = [...builtinRows, ...userRows];
+  regionList.replaceChildren(...regionRows.map((r) => r.element));
+  applyRegionFilter();
+};
+
 const buildRegionList = async () => {
   const q = boundaryLayer.createQuery();
   q.where = "1=1";
@@ -532,22 +591,47 @@ const buildRegionList = async () => {
   q.returnGeometry = false;
   const {features} = await boundaryLayer.queryFeatures(q);
 
-  regionRows = features
+  builtinRows = features
     .map((f) => ({id: f.attributes.id, name: f.attributes.n}))
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map((row) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "rfs-list-item";
-      button.textContent = row.name;
-      button.title = row.name;
-      button.setAttribute("role", "listitem");
-      button.setAttribute("aria-current", "false");
-      button.addEventListener("click", () => analyzeGlobalRegion({regionId: row.id, name: row.name}));
-      return {...row, button};
-    });
+    .map((row) => ({...row, ...regionRowElement(row)}));
+  paintRegionList();
+};
 
-  regionList.replaceChildren(...regionRows.map((r) => r.button));
+// Uploaded regions, drawn and listed. Read once at boot and kept in step from
+// there; the store is the record, these are its view.
+const loadUserRegions = async () => {
+  const saved = await listUserRegions();
+  saved.sort((a, b) => a.addedAt - b.addedAt);
+  uploadedLayer.removeAll();
+  userRows = saved.map((rec) => {
+    const row = {id: rec.id, name: rec.name, rings: rec.rings, user: true};
+    uploadedLayer.add(new Graphic({
+      geometry: new Polygon({rings: rec.rings, spatialReference: SpatialReference.WGS84}),
+      symbol: uploadedSymbolFor(darkBasemap),
+      attributes: {regionId: rec.id},
+    }));
+    return {...row, ...regionRowElement(row)};
+  });
+  paintRegionList();
+};
+
+const addUserRegion = async ({name, polygon}) => {
+  const rec = {
+    id: newUserRegionId(),
+    name,
+    // Plain arrays, so a record outlives any one SDK version.
+    rings: polygon.rings.map((ring) => ring.map(([x, y]) => [x, y])),
+    addedAt: Date.now(),
+  };
+  await putUserRegion(rec);
+  await loadUserRegions();
+  return rec;
+};
+
+const removeUserRegion = async (id) => {
+  await deleteUserRegion(id);
+  await loadUserRegions();
 };
 
 // Substring match on the name, case-insensitive. Hiding rather than rebuilding
@@ -557,7 +641,9 @@ const applyRegionFilter = () => {
   let shown = 0;
   for (const row of regionRows) {
     const match = !needle || row.name.toLowerCase().includes(needle);
-    row.button.hidden = !match;
+    // element, not button: an uploaded row is a wrapper around the button and
+    // its remove control, and hiding the button alone would leave the × behind.
+    row.element.hidden = !match;
     if (match) shown++;
   }
   const empty = regionList.querySelector(".rfs-list-empty");
@@ -650,6 +736,16 @@ const analyzeGlobalRegion = async ({regionId, name}) => {
   // puts the region's edges against the viewport edges.
   await main({polygon: boundaryGeom, zoomTarget: boundaryGeom.extent.clone().expand(1.2)});
 }
+
+const analyzeUserRegion = async (row) => {
+  setActiveRegion(row.id);
+  setBreadcrumb(row.name);
+  const polygon = new Polygon({rings: row.rings, spatialReference: SpatialReference.WGS84});
+  // The built-in outlines stay visible: an upload does not replace them, and its
+  // own outline is already drawn on the uploaded layer.
+  drawLayer.removeAll();
+  await main({polygon, zoomTarget: polygon.extent.clone().expand(1.2)});
+};
 
 const analyzeDrawnPolygon = async ({polygon}) => {
   if (polygon.spatialReference.wkid !== 4326) {
@@ -1471,7 +1567,7 @@ const resetLayers = () => {
   regionalVariableHandler = null;
   regionalSeriesHandler = null;
   lastAnalyzedPolygon = null;
-  drawLayer.removeAll();
+  drawLayer.removeAll(); // the sketch is scratch; uploadedLayer is not touched
   boundaryLayer.visible = true;
   boundaryLayer.definitionExpression = "1=1"; // reset to none selected
   arcgisMap.view.goTo(boundaryLayer.fullExtent);
@@ -1669,7 +1765,12 @@ const bootMapUi = async () => {
     clearTimeseriesPanel(appInstructions);
   }
 
+  arcgisMap.map.add(uploadedLayer);
   arcgisMap.map.add(drawLayer);
+  loadUserRegions().catch((err) => {
+    // A missing upload list is survivable; the built-in regions still work.
+    console.error("Could not load the saved regions", err);
+  });
   sketch = new SketchViewModel({
     view: arcgisMap.view,
     layer: drawLayer,
@@ -1846,6 +1947,8 @@ const bootMapUi = async () => {
   const uploadBrowseButton = document.getElementById("upload-browse-button");
   const uploadFileInfo = document.getElementById("upload-file-info");
   const uploadFileName = document.getElementById("upload-file-name");
+  const uploadRegionName = document.getElementById("upload-region-name");
+  const fileStem = (filename) => filename.replace(/\.(geo)?json$/i, "");
   const uploadClearFile = document.getElementById("upload-clear-file");
   const uploadError = document.getElementById("upload-error");
   const uploadSubmit = document.getElementById("upload-submit");
@@ -1863,6 +1966,7 @@ const bootMapUi = async () => {
     uploadSubmit.disabled = true;
     uploadSubmit.textContent = "Analyze";
     uploadDropZone.classList.remove("hidden");
+    uploadRegionName.value = "";
   };
 
   const showUploadError = (message) => {
@@ -1886,6 +1990,8 @@ const bootMapUi = async () => {
     }
 
     selectedFile = file;
+    // The file name is the default, not an override: a name already typed stays.
+    if (!uploadRegionName.value.trim()) uploadRegionName.value = fileStem(file.name);
     uploadFileName.textContent = file.name;
     uploadFileInfo.classList.remove("hidden");
     uploadDropZone.classList.add("hidden");
@@ -1949,12 +2055,14 @@ const bootMapUi = async () => {
 
     try {
       const {polygon} = await parseGeoJSONFile(selectedFile);
-      const uploadedName = selectedFile.name.replace(/\.(geo)?json$/i, "");
+      const name = uploadRegionName.value.trim() || fileStem(selectedFile.name);
       uploadModal.classList.add("hidden");
-      setBreadcrumb(uploadedName);
-      drawLayer.removeAll();
-      drawLayer.add(new Graphic({geometry: polygon, symbol: drawnSymbol}));
-      await analyzeDrawnPolygon({polygon});
+      // Saved before it is analyzed, so it survives the trip Home and the next
+      // visit. loadUserRegions draws it and lists it; analyzing it then goes
+      // through the same path as clicking its row.
+      const saved = await addUserRegion({name, polygon});
+      const row = regionRows.find((r) => r.id === saved.id);
+      await analyzeUserRegion(row ?? {id: saved.id, name, rings: saved.rings, user: true});
     } catch (err) {
       showUploadError(err.message);
       uploadSubmit.disabled = false;
