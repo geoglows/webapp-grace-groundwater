@@ -63,7 +63,17 @@
     <!-- The select names the ramp; this shows it. -->
     <div id="palette-preview" class="rfs-ramp"></div>
 
+    <div class="rfs-slider-row">
+      <label class="rfs-label" for="opacity-slider">Layer opacity</label>
+      <span id="opacity-value" class="rfs-slider-value"></span>
+    </div>
+    <input type="range" id="opacity-slider" class="rfs-range rfs-range-wide" min="0" max="1" step="0.05">
+
     <label class="rfs-check rfs-check-wide">
+      <input type="checkbox" id="border-toggle">
+      <span>Show cell boundaries</span>
+    </label>
+    <label class="rfs-check">
       <input type="checkbox" id="mascon-toggle">
       <span>Show mascon boundaries</span>
     </label>
@@ -413,16 +423,6 @@
     <hr class="my-4 border-t border-neutral-300"/>
 
     <div class="mb-6">
-      <h3 class="mb-3 text-base font-bold text-neutral-800">Layer</h3>
-      <div class="mb-3 flex items-center gap-3">
-        <label for="opacity-slider" class="min-w-[120px] text-sm">Layer opacity</label>
-        <input type="range" id="opacity-slider" min="0" max="1" step="0.05"
-               class="max-w-[150px] flex-1 cursor-pointer accent-sky-700">
-        <span id="opacity-value" class="min-w-[40px] text-sm text-neutral-600"></span>
-      </div>
-    </div>
-
-    <div class="mb-6">
       <h3 class="mb-3 text-base font-bold text-neutral-800">Water Balance Cells</h3>
       <div class="mb-3 flex items-center gap-3">
         <label for="half-degree-toggle" class="text-sm">Use half degree water balance cells (default 1.0 degree)</label>
@@ -456,10 +456,6 @@
 
     <div class="mb-6">
       <h3 class="mb-3 text-base font-bold text-neutral-800">Anomaly Cell Boundaries</h3>
-      <div class="mb-3 flex items-center gap-3">
-        <label for="border-toggle" class="min-w-[120px] text-sm">Show anomaly cell boundaries</label>
-        <input type="checkbox" id="border-toggle" class="size-[18px] cursor-pointer accent-sky-700">
-      </div>
       <div class="mb-3 flex items-center gap-3">
         <label for="border-width" class="min-w-[120px] text-sm">Boundary width</label>
         <input type="range" id="border-width" min="0.5" max="3" step="0.5"

@@ -549,3 +549,24 @@ body.panel-resizing * {
     flex-shrink: 0;
     border-radius: 2px;
 }
+
+/* A slider's label and its live value on one line, with the track full width
+   underneath — at 320px a label, track and readout side by side leaves the
+   track too short to aim with. */
+.rfs-slider-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-top: 14px;
+}
+
+.rfs-slider-value {
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+}
+
+.rfs-range-wide {
+    width: 100%;
+    margin-top: 6px;
+}
