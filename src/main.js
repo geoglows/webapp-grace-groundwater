@@ -349,6 +349,15 @@ const resolutionOf = (varName) => VARIABLES[varName].resolution;
 const zarrUrlFor = (resolution) => ZARR_URLS[resolution];
 // The grid the map's raster is drawn on: whichever the displayed layer uses.
 const displayedResolution = () => resolutionOf(displayConfig.variable);
+
+// Cell boundaries for the global raster: the same black-on-pale, white-on-dark
+// rule the regional cells follow, at partial opacity so the grid reads as edges
+// between cells rather than as a mesh drawn over them.
+const globalBorderConfig = () => ({
+  show: displayConfig.showBorders,
+  width: displayConfig.borderWidth,
+  color: darkBasemap ? [255, 255, 255, 0.5] : [0, 0, 0, 0.5],
+});
 // Both stores carry the same 290 month axis, so the time array is read from one
 // of them rather than once per grid.
 const TIME_RESOLUTION = "1.0";
@@ -537,6 +546,10 @@ const applyBasemapContrast = (basemapId) => {
   boundaryLayer.labelingInfo = [regionLabelFor(darkBasemap)];
   masconLayer.renderer = masconRenderer();
   paintUploadedSymbols();
+  if (globalView.renderer) {
+    globalView.renderer.setBorders(globalBorderConfig());
+    if (globalView.active) globalView.renderer.redraw();
+  }
 };
 
 // Every set is a separate file, so switching means a new layer rather than a new
@@ -1730,7 +1743,7 @@ const analyzeGlobalView = async ({keepView = false} = {}) => {
   displayConfig.maxValue = stats.suggestedMax;
   setGlobalGrid(varName);
   globalView.renderer.setStops(generateStops());
-  globalView.renderer.setBorders({show: displayConfig.showBorders, width: displayConfig.borderWidth});
+  globalView.renderer.setBorders(globalBorderConfig());
   globalView.renderer.layer.opacity = displayConfig.opacity;
   updateMapLegend();
   setLegendAvailable(true);
@@ -2653,7 +2666,7 @@ const bootMapUi = async () => {
       const showingTrends = trendState.on && trendState.mode === "global";
       globalView.renderer.layer.opacity = displayConfig.opacity;
       globalView.renderer.setStops(showingTrends ? trendCategoryStops() : generateStops());
-      globalView.renderer.setBorders({show: displayConfig.showBorders, width: displayConfig.borderWidth});
+      globalView.renderer.setBorders(globalBorderConfig());
       globalView.renderer.redraw();
       // The trend classes are fixed colors, so a palette change leaves them
       // alone and the category legend already describes them.

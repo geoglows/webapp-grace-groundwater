@@ -15,8 +15,21 @@ import ImageElement from "@arcgis/core/layers/support/ImageElement.js";
 // four-corner warp, which is linear and would misplace mid-latitudes.
 const EARTH_RADIUS = 6378137;
 const MAX_MERCATOR_LAT = 85.05112878;
-const CANVAS_WIDTH = 1440;
-const CANVAS_HEIGHT = 1024;
+// The canvas is sized from the grid rather than fixed, because the MediaLayer
+// stretches it and offers no way to ask for nearest-neighbour sampling: at 1440
+// px a 1 degree cell was 4 px across, so any zoom past the whole world smeared
+// the cells into each other and invented gradients the data does not have.
+//
+// Eight pixels a cell pushes that out by two zoom levels, which covers the range
+// a whole-world view is actually read at. It cannot be pushed indefinitely — one
+// world-sized canvas can never stay crisp at every zoom — so the width is capped
+// to keep the buffer and the per-frame fill affordable. At the cap a half-degree
+// grid gets four pixels a cell, the same as a degree grid used to get.
+const TARGET_PX_PER_CELL = 8;
+const MIN_CANVAS_WIDTH = 1440;
+const MAX_CANVAS_WIDTH = 3072;
+// Height follows the width at the aspect the Mercator warp was tuned for.
+const CANVAS_ASPECT = 1024 / 1440;
 const LUT_SIZE = 1024;
 
 const mercatorY = (latDeg) => EARTH_RADIUS * Math.log(Math.tan(Math.PI / 4 + (latDeg * Math.PI) / 360));
@@ -29,11 +42,17 @@ const hexToRgb = (hex) => [
   parseInt(hex.slice(5, 7), 16)
 ];
 
-// Opaque black cell-boundary line, packed endianness-safe like the LUT entries.
-const BORDER_PACKED = (() => {
-  const rgba = new Uint8ClampedArray([0, 0, 0, 255]);
+// Cell-boundary line color, packed endianness-safe like the LUT entries. Opaque
+// black was too heavy: the line is drawn in canvas pixels and then stretched
+// with everything else, so at a few pixels a cell it read as a grid laid over
+// the data rather than as edges between cells. Partly transparent, it separates
+// the cells without competing with them, and the caller picks the color so it
+// can follow the basemap the way every other outline in the app does.
+const packColor = ([r, g, b, a = 1]) => {
+  const rgba = new Uint8ClampedArray([r, g, b, Math.round(a * 255)]);
   return new Uint32Array(rgba.buffer)[0];
-})();
+};
+const DEFAULT_BORDER_COLOR = [0, 0, 0, 0.55];
 
 // Continuous color lookup table interpolated between the renderer stops, so
 // the raster matches the colors the FeatureLayer's visualVariables produce.
@@ -69,25 +88,40 @@ export function createGlobalRenderer({title}) {
   let pxPerCell = 0;       // horizontal pixels per grid cell
   let extent = null;       // mercator extent of the rendered image
   let lut = null;
-  let borders = {show: false, width: 1}; // grid cell boundaries, mirrors the regional layer's outline
+  // Grid cell boundaries, mirroring the regional layer's outline.
+  let borders = {show: false, width: 1, color: DEFAULT_BORDER_COLOR};
+  let borderPacked = packColor(DEFAULT_BORDER_COLOR);
   let currentT = 0;
   let element = null;
-  const imageData = new ImageData(CANVAS_WIDTH, CANVAS_HEIGHT);
+  // Allocated on the first grid and again whenever the grid's width changes,
+  // which is the resolution switch and nothing else.
+  let canvasWidth = 0;
+  let canvasHeight = 0;
+  let imageData = null;
   const canvas = document.createElement("canvas");
-  canvas.width = CANVAS_WIDTH;
-  canvas.height = CANVAS_HEIGHT;
   const ctx = canvas.getContext("2d");
+
+  const sizeCanvasFor = (nLon) => {
+    const width = Math.min(MAX_CANVAS_WIDTH, Math.max(MIN_CANVAS_WIDTH, nLon * TARGET_PX_PER_CELL));
+    if (width === canvasWidth) return;
+    canvasWidth = width;
+    canvasHeight = Math.round(width * CANVAS_ASPECT);
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    imageData = new ImageData(canvasWidth, canvasHeight);
+  };
 
   // grid rows run south -> north; canvas rows run top (north) -> bottom
   const setGrid = ({frames, nT, nLat, nLon, latEdgeMin, cellSize}) => {
     grid = {frames, nT, nLat, nLon};
-    pxPerCell = Math.floor(CANVAS_WIDTH / nLon);
+    sizeCanvasFor(nLon);
+    pxPerCell = Math.floor(canvasWidth / nLon);
     const latEdgeMax = latEdgeMin + nLat * cellSize;
     const yTop = mercatorY(Math.min(latEdgeMax, MAX_MERCATOR_LAT));
     const yBottom = mercatorY(Math.max(latEdgeMin, -MAX_MERCATOR_LAT));
-    rowOffsets = new Int32Array(CANVAS_HEIGHT);
-    for (let j = 0; j < CANVAS_HEIGHT; j++) {
-      const y = yTop - ((j + 0.5) / CANVAS_HEIGHT) * (yTop - yBottom);
+    rowOffsets = new Int32Array(canvasHeight);
+    for (let j = 0; j < canvasHeight; j++) {
+      const y = yTop - ((j + 0.5) / canvasHeight) * (yTop - yBottom);
       const row = Math.floor((inverseMercatorLat(y) - latEdgeMin) / cellSize);
       rowOffsets[j] = row >= 0 && row < nLat ? row * nLon : -1;
     }
@@ -106,6 +140,7 @@ export function createGlobalRenderer({title}) {
 
   const setBorders = (config) => {
     borders = {...borders, ...config};
+    borderPacked = packColor(borders.color ?? DEFAULT_BORDER_COLOR);
   };
 
   const colorize = (t, imageData) => {
@@ -119,14 +154,21 @@ export function createGlobalRenderer({title}) {
     // (horizontal line, `bw` canvas rows); boundaries are drawn only on cells
     // that actually hold data so the grid doesn't bleed over transparent ocean.
     const drawBorders = borders.show && pxPerCell >= 3;
-    const bw = drawBorders ? Math.max(1, Math.min(pxPerCell - 1, Math.round(borders.width))) : 0;
+    // The setting is a line width in the regional layer's pixels, where a cell is
+    // whatever the map's zoom makes it. Here a cell is pxPerCell canvas pixels
+    // regardless of zoom, so the width is taken as a share of the cell — one
+    // eighth per unit — and the line stays proportional when the canvas is sized
+    // up for a finer grid instead of doubling in weight.
+    const bw = drawBorders
+      ? Math.max(1, Math.min(pxPerCell - 1, Math.round((pxPerCell * borders.width) / 8)))
+      : 0;
     let prevOffset = -1;
     let sinceTop = 0;
-    for (let j = 0; j < CANVAS_HEIGHT; j++) {
-      let o = j * CANVAS_WIDTH;
+    for (let j = 0; j < canvasHeight; j++) {
+      let o = j * canvasWidth;
       const srcOffset = rowOffsets[j];
       if (srcOffset < 0) {
-        px.fill(0, o, o + CANVAS_WIDTH);
+        px.fill(0, o, o + canvasWidth);
         prevOffset = -1;
         continue;
       }
@@ -143,8 +185,8 @@ export function createGlobalRenderer({title}) {
           else if (q >= LUT_SIZE) q = LUT_SIZE - 1;
           px.fill(table[q], o, o + pxPerCell);
           if (drawBorders) {
-            px.fill(BORDER_PACKED, o, o + bw);                 // left edge
-            if (topEdge) px.fill(BORDER_PACKED, o, o + pxPerCell); // top edge
+            px.fill(borderPacked, o, o + bw);                 // left edge
+            if (topEdge) px.fill(borderPacked, o, o + pxPerCell); // top edge
           }
         } else {
           px.fill(0, o, o + pxPerCell); // transparent for NaN (oceans, missing months)
@@ -152,7 +194,7 @@ export function createGlobalRenderer({title}) {
         o += pxPerCell;
       }
       // clear the remainder when the width isn't an exact multiple of nLon
-      const rowEnd = (j + 1) * CANVAS_WIDTH;
+      const rowEnd = (j + 1) * canvasWidth;
       if (o < rowEnd) px.fill(0, o, rowEnd);
     }
   };
