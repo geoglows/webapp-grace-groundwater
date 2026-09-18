@@ -155,6 +155,9 @@ const drawLayer = new GraphicsLayer({title: "User drawn polygons", listMode: "hi
 // outlines. resetLayers clears the first and leaves this one alone, which is why
 // an upload used to vanish on the way Home.
 const uploadedLayer = new GraphicsLayer({title: "Uploaded regions", listMode: "hide"});
+// The one cell picked out of the whole-world raster. Its own layer so clearing
+// it never disturbs a sketch or an uploaded outline.
+const cellPickLayer = new GraphicsLayer({title: "Selected cell", listMode: "hide"});
 
 // Green, so an upload stands apart from the built-in outlines (blue, or amber
 // over imagery) and from a sketch (cyan). The list rows use the same hue.
@@ -1023,6 +1026,136 @@ const runTrends = async () => {
   }
 };
 
+// ---- Picking one cell out of the whole-world raster -------------------------
+// The global view draws into a canvas rather than into features, so there is
+// nothing to hit test. The click is resolved arithmetically instead: the cell
+// whose centre is nearest the point, in that variable's own grid.
+let pickedCell = null; // {resolution, iy, ix} — kept so a variable change can re-read the same cell
+
+const cellIndexAt = (lon, lat, coords) => {
+  const nearest = (arr, v) => {
+    let best = 0;
+    for (let i = 1; i < arr.length; i++) {
+      if (Math.abs(arr[i] - v) < Math.abs(arr[best] - v)) best = i;
+    }
+    return best;
+  };
+  return {iy: nearest(coords.lat.data, lat), ix: nearest(coords.lon.data, lon)};
+};
+
+// A cell's series straight out of the frame buffer, which is time-major.
+const cellSeries = ({frames, nT, nLat, nLon}, iy, ix) => {
+  const frameSize = nLat * nLon;
+  const offset = iy * nLon + ix;
+  const out = new Float64Array(nT);
+  for (let t = 0; t < nT; t++) out[t] = frames[t * frameSize + offset];
+  return out;
+};
+
+const formatLatLon = (lat, lon) =>
+  `${Math.abs(lat).toFixed(2)}\u00b0${lat >= 0 ? "N" : "S"}, ${Math.abs(lon).toFixed(2)}\u00b0${lon >= 0 ? "E" : "W"}`;
+
+const clearPickedCell = () => {
+  pickedCell = null;
+  cellPickLayer.removeAll();
+};
+
+/**
+ * Plot the picked cell. Draws the same variables the series toggles ask for,
+ * each read from its own grid — TWSa is half-degree, so its cell is a different
+ * cell from GWSa's at the same click, which is the honest thing to plot.
+ */
+const plotPickedCell = async (lon, lat) => {
+  const wanted = plottedVariables();
+  const runId = ++analysisRunSeq; // a second click abandons the first
+  const series = [];
+
+  for (const varName of wanted) {
+    const resolution = resolutionOf(varName);
+    try {
+      await ensureGlobalData(varName);
+      if (runId !== analysisRunSeq) return;
+      const coords = await ensureCoords(resolution);
+      const {iy, ix} = cellIndexAt(lon, lat, coords);
+      const data = globalView.byVar[varName]?.data;
+      if (!data) continue;
+      const values = cellSeries(data, iy, ix);
+      if (!values.some(Number.isFinite)) continue; // ocean, or no data in this cell
+      const {longName, color} = VARIABLES[varName];
+      const entry = {name: varName, longName, color, values, uncertainty: null};
+
+      if (trendState.on) {
+        const {from, label} = trendWindow();
+        const fit = computeFit(timeDates, values, {minPoints: TREND_MIN_MONTHS, from});
+        const pts = fitEndpoints(timeDates, values, fit, {from});
+        if (pts) {
+          entry.trendPoints = pts;
+          entry.trendLabel = `${varName} trend ${fit.slope >= 0 ? "+" : ""}${fit.slope.toFixed(2)} ${UNITS}/yr (${label})`;
+        }
+      }
+      series.push(entry);
+      if (varName === displayConfig.variable) {
+        // Outline the cell actually read, which is the displayed layer's — the
+        // other variables' cells may be bigger or smaller.
+        const half = (coords.lat.data[1] - coords.lat.data[0]) / 2;
+        cellPickLayer.removeAll();
+        cellPickLayer.add(new Graphic({
+          geometry: cellPolygonFromCenter({
+            xCenter: coords.lon.data[ix], yCenter: coords.lat.data[iy], halfWidth: half,
+          }),
+          symbol: {
+            type: "simple-fill",
+            color: [56, 189, 248, 0.15],
+            outline: {color: [56, 189, 248, 0.95], width: 2},
+          },
+        }));
+        pickedCell = {resolution, iy, ix, lon: coords.lon.data[ix], lat: coords.lat.data[iy]};
+      }
+    } catch (err) {
+      console.error(`Could not read ${varName} for this cell`, err);
+    }
+  }
+
+  if (runId !== analysisRunSeq) return;
+  if (!series.length) {
+    // Ocean, ice sheet, or a month range with nothing in it.
+    clearPickedCell();
+    panels.setChartVisible(false);
+    setBreadcrumb("Global map", {home: false});
+    return;
+  }
+
+  panels.setChartVisible(true);
+  activeChart?.destroy();
+  activeChart = renderTimeseriesChart({
+    container: timeseriesPlotDiv,
+    dates: timeDates,
+    series,
+    units: UNITS,
+    valueLabel: VALUE_LABEL,
+    fillGaps: displayConfig.fillGaps,
+    fileStem: `grace_cell_${lat.toFixed(2)}_${lon.toFixed(2)}`,
+    getCsv: async () => {
+      const all = Object.keys(VARIABLES);
+      const cols = [];
+      for (const v of all) {
+        try {
+          await ensureGlobalData(v);
+          const coords = await ensureCoords(resolutionOf(v));
+          const {iy, ix} = cellIndexAt(lon, lat, coords);
+          const data = globalView.byVar[v]?.data;
+          if (data) cols.push({name: v, values: cellSeries(data, iy, ix), uncertainty: null});
+        } catch { /* a variable that will not load is left out of the file */ }
+      }
+      return seriesToCsv({dates: timeDates, series: cols});
+    },
+  });
+  activeChart.setMarker(timeControl?.currentDate ?? null);
+  setBreadcrumb(formatLatLon(pickedCell?.lat ?? lat, pickedCell?.lon ?? lon), {home: false});
+  // A variable toggle re-reads the same point rather than the same region.
+  regionalSeriesHandler = () => plotPickedCell(lon, lat);
+};
+
 // ---- Left panel: region list and breadcrumb --------------------------------
 // One row per region, built once from the layer's own features so the list and
 // the outlines can never disagree about what exists. Clicking a row runs the
@@ -1508,6 +1641,9 @@ const prefetchGlobalVariables = () => {
 const analyzeGlobalView = async ({keepView = false} = {}) => {
   setActiveRegion(null);
   setBreadcrumb("Global map", {home: false});
+  // keepView is a variable toggle, which should re-read the same point rather
+  // than lose it; entering the view afresh starts with nothing picked.
+  if (!keepView) clearPickedCell();
   clearTrendsOnViewChange("global");
   const runId = ++globalView.runSeq;
   analysisRunSeq++; // abandon any in-flight regional analysis
@@ -1600,7 +1736,12 @@ const analyzeGlobalView = async ({keepView = false} = {}) => {
   setLegendAvailable(true);
 
   const validDates = stats.validTimeIndices.map((t) => timeDates[t]);
-  timeStepHandler = (idx) => globalView.renderer.drawFrame(idx);
+  timeStepHandler = (idx) => {
+    globalView.renderer.drawFrame(idx);
+    // A picked cell's chart is showing beneath the map, so its marker tracks the
+    // animation the same way the regional one does.
+    if (pickedCell) activeChart?.setMarker(timeDates[idx]);
+  };
   ensureTimeControl();
   configureTimeControl(validDates.length ? validDates : timeDates, {keepCurrent: keepView});
   timeControl.playRate = GLOBAL_PLAY_RATE_MS;
@@ -1616,6 +1757,7 @@ const analyzeGlobalView = async ({keepView = false} = {}) => {
 
 const exitGlobalView = () => {
   clearTrendsOnViewChange("region");
+  clearPickedCell();
   globalView.runSeq++;
   globalView.active = false;
   setActiveViewButton("regional");
@@ -2266,6 +2408,19 @@ const bootMapUi = async () => {
   // meant for a vertex would kick off an analysis of whatever is underneath.
   arcgisMap.view.on("click", async (event) => {
     if (sketch?.state === "active") return;
+
+    // The whole-world raster has no features to hit test, so a click there picks
+    // the cell under the pointer instead of a region.
+    if (globalView.active) {
+      const point = event.mapPoint;
+      if (!point) return;
+      const lon = point.longitude ?? point.x;
+      const lat = point.latitude ?? point.y;
+      if (!Number.isFinite(lon) || !Number.isFinite(lat)) return;
+      plotPickedCell(lon, lat).catch((err) => console.error("Could not plot that cell", err));
+      return;
+    }
+
     // Both layers: the published sets draw on boundaryLayer, the uploads on
     // uploadedLayer, and only one of the two is ever visible. Without this an
     // uploaded outline was unclickable — the row in the panel worked, the
@@ -2378,8 +2533,12 @@ const bootMapUi = async () => {
       if (trendState.mode === "global") runGlobalTrends();
       else runTrends();
     }
-    if (globalView.active) analyzeGlobalView({keepView: true});
-    else regionalVariableHandler?.();
+    if (globalView.active) {
+      const point = pickedCell && {lon: pickedCell.lon, lat: pickedCell.lat};
+      analyzeGlobalView({keepView: true}).then(() => {
+        if (point) plotPickedCell(point.lon, point.lat).catch(() => {});
+      });
+    } else regionalVariableHandler?.();
     // neither view active (instructions showing): the next analysis picks it up
   });
 
@@ -2396,6 +2555,7 @@ const bootMapUi = async () => {
   }
 
   arcgisMap.map.add(uploadedLayer);
+  arcgisMap.map.add(cellPickLayer);
   arcgisMap.map.add(drawLayer);
 
   loadRegionSets()
