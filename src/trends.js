@@ -144,7 +144,25 @@ export function regionMeanSeries({rings, extent, frames, nT, nLat, nLon, lat, lo
       if (pointInRings(x, y, rings)) inside.push({offset: iy * nLon + ix, w});
     }
   }
-  if (!inside.length) return null;
+  // A region smaller than a cell can contain no cell center at all — likely for
+  // an uploaded boundary, since the published sets are all far larger than 1
+  // degree. Falling back to the cell its middle sits in gives such a region the
+  // trend of the cell it lies within, which is the best the grid can say about
+  // it, rather than reporting it as having no data.
+  if (!inside.length) {
+    const midY = (extent.ymin + extent.ymax) / 2;
+    const midX = (extent.xmin + extent.xmax) / 2;
+    const nearest = (arr, v) => {
+      let best = 0;
+      for (let i = 1; i < arr.length; i++) {
+        if (Math.abs(arr[i] - v) < Math.abs(arr[best] - v)) best = i;
+      }
+      return best;
+    };
+    const iy = nearest(lat, midY);
+    const ix = nearest(lon, midX);
+    inside.push({offset: iy * nLon + ix, w: 1});
+  }
 
   const frameSize = nLat * nLon;
   const series = new Float64Array(nT);

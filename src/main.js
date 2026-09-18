@@ -533,7 +533,7 @@ const applyBasemapContrast = (basemapId) => {
     : {type: "simple", symbol: regionSymbolFor(darkBasemap)};
   boundaryLayer.labelingInfo = [regionLabelFor(darkBasemap)];
   masconLayer.renderer = masconRenderer();
-  for (const g of uploadedLayer.graphics) g.symbol = uploadedSymbolFor(darkBasemap);
+  paintUploadedSymbols();
 };
 
 // Every set is a separate file, so switching means a new layer rather than a new
@@ -822,7 +822,29 @@ const renderTrendLegend = ({varName, counts, noun, window}) => {
 // A unique-value renderer keyed on the region id, rather than a second layer of
 // filled graphics: the geometry is already on the map and 81 symbols are
 // cheaper than 81 copies of it.
+// The uploads are graphics on their own layer rather than features with a
+// renderer, so their trend colors are set per graphic. Called wherever the
+// default symbol would otherwise be applied, so a classification survives a
+// basemap change and a reload of the list.
+const paintUploadedSymbols = () => {
+  const showingTrends = trendState.on && trendState.mode === "region";
+  for (const graphic of uploadedLayer.graphics) {
+    const cat = showingTrends ? trendState.byRegion.get(graphic.attributes?.regionId) : null;
+    graphic.symbol = cat
+      ? {
+        type: "simple-fill",
+        color: [...hexToRgb(cat.color), 0.55],
+        outline: {color: darkBasemap ? [255, 255, 255, 0.5] : [30, 41, 59, 0.55], width: 1.5},
+      }
+      : uploadedSymbolFor(darkBasemap);
+  }
+};
+
 const applyTrendRenderer = () => {
+  // My Regions has no features to render — its outlines are on uploadedLayer —
+  // so the classification is painted there instead. Without this the trend ran,
+  // the legend filled in, and nothing on the map changed.
+  paintUploadedSymbols();
   boundaryLayer.renderer = {
     type: "unique-value",
     field: "id",
@@ -850,6 +872,7 @@ const setTrendsOff = () => {
   trendState.varName = null;
   trendState.byRegion.clear();
   boundaryLayer.renderer = {type: "simple", symbol: regionSymbolFor(darkBasemap)};
+  paintUploadedSymbols(); // back to green now that byRegion is empty
   trendLegendDiv.classList.add("hidden");
   trendWindowField.classList.add("hidden");
   trendsButton.setAttribute("aria-pressed", "false");
@@ -1111,6 +1134,10 @@ const loadUserRegions = async () => {
     }));
     return {...row, ...regionRowElement(row)};
   });
+  // The uploads are the regions in My Regions, so adding or removing one
+  // changes what a classification covers.
+  regionRingsPromise = null;
+  paintUploadedSymbols();
   paintRegionList();
 };
 
