@@ -29,6 +29,3 @@ dist-ssr
 __pycache__/
 *.zarr/
 *.zarr3/
-
-# Scratch conversion output — not part of the app (see converted-regions/manifest.json)
-converted-regions/
