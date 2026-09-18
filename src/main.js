@@ -577,7 +577,9 @@ const setRegionSet = async (set) => {
   const index = arcgisMap.map?.layers?.indexOf(boundaryLayer) ?? -1;
   const previous = boundaryLayer;
   boundaryLayer = makeBoundaryLayer(set.file ? regionSetUrl(set.file) : null);
-  boundaryLayer.visible = previous.visible;
+  // My Regions has no file: the layer stays hidden rather than being a
+  // GeoJSONLayer pointed at nothing, which would also swallow map clicks.
+  boundaryLayer.visible = Boolean(set.file) && previous.visible;
   if (arcgisMap.map) {
     arcgisMap.map.remove(previous);
     // Back where it was, so the mascons and the anomaly raster keep their order.
@@ -1568,8 +1570,10 @@ const exitGlobalView = () => {
     arcgisMap.map.layers.remove(globalView.renderer.layer);
   }
   // Undo the global-view state changes; callers (main/resetLayers) re-show the
-  // shared legend when a regional layer takes over.
-  boundaryLayer.visible = true;
+  // shared legend when a regional layer takes over. My Regions has no outlines
+  // to restore — its layer carries no file.
+  boundaryLayer.visible = Boolean(activeRegionSet.file);
+  uploadedLayer.visible = !activeRegionSet.file;
   globalProgressDiv.classList.add("hidden");
   setLegendAvailable(false);
   panels.setChartVisible(true);
@@ -2067,9 +2071,12 @@ const resetLayers = () => {
   regionalSeriesHandler = null;
   lastAnalyzedPolygon = null;
   drawLayer.removeAll(); // the sketch is scratch; uploadedLayer is not touched
-  boundaryLayer.visible = true;
+  boundaryLayer.visible = Boolean(activeRegionSet.file);
+  uploadedLayer.visible = !activeRegionSet.file;
   boundaryLayer.definitionExpression = "1=1"; // reset to none selected
-  arcgisMap.view.goTo(boundaryLayer.fullExtent);
+  // The same fit the set picker uses: boundaryLayer.fullExtent is the whole
+  // world for a fileless set, which sent Home past the globe.
+  fitRegionSet();
   timeControl?.hide();
   clearTimeseriesPanel(appInstructions);
   const possiblyExistingLayer = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
@@ -2200,8 +2207,21 @@ const bootMapUi = async () => {
   // view hides the outlines entirely, so both are excluded — otherwise a click
   // meant for a vertex would kick off an analysis of whatever is underneath.
   arcgisMap.view.on("click", async (event) => {
-    if (!boundaryLayer.visible || sketch?.state === "active") return;
-    const {results} = await arcgisMap.view.hitTest(event, {include: boundaryLayer});
+    if (sketch?.state === "active") return;
+    // Both layers: the published sets draw on boundaryLayer, the uploads on
+    // uploadedLayer, and only one of the two is ever visible. Without this an
+    // uploaded outline was unclickable — the row in the panel worked, the
+    // polygon on the map did not.
+    const layers = [boundaryLayer, uploadedLayer].filter((l) => l.visible);
+    if (!layers.length) return;
+    const {results} = await arcgisMap.view.hitTest(event, {include: layers});
+
+    const uploaded = results.find((r) => r.graphic?.layer === uploadedLayer);
+    if (uploaded) {
+      const row = userRows.find((r) => r.id === uploaded.graphic.attributes?.regionId);
+      if (row) analyzeUserRegion(row);
+      return;
+    }
     const hit = results.find((r) => r.graphic?.attributes?.id != null);
     if (hit) analyzeGlobalRegion({regionId: hit.graphic.attributes.id, name: hit.graphic.attributes.n});
   });
