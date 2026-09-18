@@ -1072,6 +1072,35 @@ const cellSeries = ({frames, nT, nLat, nLon}, iy, ix) => {
   return out;
 };
 
+/**
+ * One cell's uncertainty series, read straight from the store.
+ *
+ * The values come out of the whole-world frames the animation already holds,
+ * but no equivalent exists for the _unc arrays and loading one globally is 60 MB
+ * for a shaded band. Asking for one cell instead still fetches its containing
+ * chunk — the arrays are chunked [290, 50, 50], about 900 KB compressed — but
+ * that is a sixtieth of the global read, and every other cell in the same 50 x
+ * 50 block then comes from the chunk already fetched. Memoized per cell on top
+ * of that, so a variable toggled off and back on costs nothing.
+ */
+const cellUncCache = new Map();
+const cellUncertainty = async (varName, iy, ix) => {
+  const key = `${varName}|${iy}|${ix}`;
+  if (!cellUncCache.has(key)) {
+    cellUncCache.set(key, (async () => {
+      const nodes = await getVarNodes(varName);
+      if (!nodes.unc) return null; // the store has no _unc array for this one
+      const win = await get(nodes.unc, [null, {start: iy, stop: iy + 1}, {start: ix, stop: ix + 1}]);
+      return Float64Array.from(win.data);
+    })().catch((err) => {
+      cellUncCache.delete(key); // allow a retry
+      console.warn(`No uncertainty for ${varName} at this cell`, err);
+      return null;
+    }));
+  }
+  return cellUncCache.get(key);
+};
+
 const formatLatLon = (lat, lon) =>
   `${Math.abs(lat).toFixed(2)}\u00b0${lat >= 0 ? "N" : "S"}, ${Math.abs(lon).toFixed(2)}\u00b0${lon >= 0 ? "E" : "W"}`;
 
@@ -1102,7 +1131,10 @@ const plotPickedCell = async (lon, lat) => {
       const values = cellSeries(data, iy, ix);
       if (!values.some(Number.isFinite)) continue; // ocean, or no data in this cell
       const {longName, color} = VARIABLES[varName];
-      const entry = {name: varName, longName, color, values, uncertainty: null};
+      // Only the lone series can show a band, so only then is it worth reading.
+      const uncertainty = wanted.length === 1 ? await cellUncertainty(varName, iy, ix) : null;
+      if (runId !== analysisRunSeq) return;
+      const entry = {name: varName, longName, color, values, uncertainty};
 
       if (trendState.on) {
         const {from, label} = trendWindow();
@@ -1165,7 +1197,13 @@ const plotPickedCell = async (lon, lat) => {
           const coords = await ensureCoords(resolutionOf(v));
           const {iy, ix} = cellIndexAt(lon, lat, coords);
           const data = globalView.byVar[v]?.data;
-          if (data) cols.push({name: v, values: cellSeries(data, iy, ix), uncertainty: null});
+          if (data) {
+            cols.push({
+              name: v,
+              values: cellSeries(data, iy, ix),
+              uncertainty: await cellUncertainty(v, iy, ix),
+            });
+          }
         } catch { /* a variable that will not load is left out of the file */ }
       }
       return seriesToCsv({dates: timeDates, series: cols});
