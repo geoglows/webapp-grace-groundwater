@@ -570,6 +570,17 @@ let boundaryLayer = makeBoundaryLayer(null);
 // select:false for a caller that is about to analyze something itself — the
 // upload flow, which knows exactly which region it wants and would otherwise
 // have the auto-select run the same analysis first.
+// Which of the two outline layers is showing follows from the active set and
+// the active view, and from nothing else. Carrying the previous layer's
+// visibility across a switch is what emptied a published set after a visit to
+// My Regions: that set hides boundaryLayer, so coming back computed
+// "has a file AND was visible" and left it hidden.
+const applyOutlineVisibility = () => {
+  const showOutlines = !globalView.active; // the whole-world raster covers them
+  boundaryLayer.visible = showOutlines && Boolean(activeRegionSet.file);
+  uploadedLayer.visible = showOutlines && !activeRegionSet.file;
+};
+
 const setRegionSet = async (set, {select = true} = {}) => {
   activeRegionSet = set;
   if (trendState.on) setTrendsOff();
@@ -580,9 +591,7 @@ const setRegionSet = async (set, {select = true} = {}) => {
   const index = arcgisMap.map?.layers?.indexOf(boundaryLayer) ?? -1;
   const previous = boundaryLayer;
   boundaryLayer = makeBoundaryLayer(set.file ? regionSetUrl(set.file) : null);
-  // My Regions has no file: the layer stays hidden rather than being a
-  // GeoJSONLayer pointed at nothing, which would also swallow map clicks.
-  boundaryLayer.visible = Boolean(set.file) && previous.visible;
+  applyOutlineVisibility();
   if (arcgisMap.map) {
     arcgisMap.map.remove(previous);
     // Back where it was, so the mascons and the anomaly raster keep their order.
@@ -1124,7 +1133,7 @@ const loadUserRegions = async () => {
   uploadedLayer.removeAll();
   // Drawn only while their own set is showing, for the same reason they are
   // listed only there.
-  uploadedLayer.visible = !activeRegionSet.file;
+  applyOutlineVisibility();
   userRows = saved.map((rec) => {
     const row = {id: rec.id, name: rec.name, rings: rec.rings, user: true};
     uploadedLayer.add(new Graphic({
@@ -1277,7 +1286,10 @@ const analyzeDrawnPolygon = async ({polygon}) => {
     await shapePreservingProjectOperator.load()
     polygon = shapePreservingProjectOperator.execute(polygon, SpatialReference.WGS84);
   }
+  // A sketch is its own area of interest, so the set's outlines step aside for
+  // it — whichever layer they are on.
   boundaryLayer.visible = false;
+  uploadedLayer.visible = false;
   setActiveRegion(null);
   if (!breadcrumb.querySelector("[data-crumb]")) setBreadcrumb("Drawn polygon");
   await main({polygon, zoomTarget: polygon.extent});
@@ -1502,8 +1514,9 @@ const analyzeGlobalView = async ({keepView = false} = {}) => {
   regionalVariableHandler = null;
   drawLayer.removeAll();
   // The whole-world raster covers the map; the region outlines would only
-  // clutter it, so hide them here (exitGlobalView restores them).
-  boundaryLayer.visible = false;
+  // clutter it, so hide them here (exitGlobalView restores them). globalView
+  // .active is already true above, so this hides whichever layer is up.
+  applyOutlineVisibility();
   boundaryLayer.definitionExpression = "1=1";
   const possiblyExistingLayer = arcgisMap.map.layers.find((l) => l.title === "GRACE Anomalies");
   if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);
@@ -1614,8 +1627,7 @@ const exitGlobalView = () => {
   // Undo the global-view state changes; callers (main/resetLayers) re-show the
   // shared legend when a regional layer takes over. My Regions has no outlines
   // to restore — its layer carries no file.
-  boundaryLayer.visible = Boolean(activeRegionSet.file);
-  uploadedLayer.visible = !activeRegionSet.file;
+  applyOutlineVisibility();
   globalProgressDiv.classList.add("hidden");
   setLegendAvailable(false);
   panels.setChartVisible(true);
@@ -2113,8 +2125,7 @@ const resetLayers = () => {
   regionalSeriesHandler = null;
   lastAnalyzedPolygon = null;
   drawLayer.removeAll(); // the sketch is scratch; uploadedLayer is not touched
-  boundaryLayer.visible = Boolean(activeRegionSet.file);
-  uploadedLayer.visible = !activeRegionSet.file;
+  applyOutlineVisibility();
   boundaryLayer.definitionExpression = "1=1"; // reset to none selected
   // The same fit the set picker uses: boundaryLayer.fullExtent is the whole
   // world for a fileless set, which sent Home past the globe.
