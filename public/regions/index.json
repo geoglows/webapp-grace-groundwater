@@ -18,18 +18,18 @@
       "attribution": null
     },
     {
-      "id": "igrac-tba",
-      "label": "Transboundary Aquifers (IGRAC)",
-      "file": "igrac-tba.geojson",
-      "attribution": "Transboundary Aquifers of the World 2025 \u00a9 UNESCO-IHP / IGRAC, CC BY-SA 3.0 IGO",
-      "source": "https://ihp-wins.unesco.org/en/dataset/2025-transboundary-aquifers-of-the-world"
-    },
-    {
       "id": "whymap-lgas",
       "label": "Large Aquifer Systems (WHYMAP)",
       "file": "whymap-lgas.geojson",
       "attribution": "Large Aquifer Systems of the World, WHYMAP (BGR/UNESCO), via UNESCO IHP-WINS",
       "source": "https://ihp-wins.unesco.org/dataset/large-aquifer-systems-of-the-world"
+    },
+    {
+      "id": "igrac-tba",
+      "label": "Transboundary Aquifers (IGRAC)",
+      "file": "igrac-tba.geojson",
+      "attribution": "Transboundary Aquifers of the World 2025 \u00a9 UNESCO-IHP / IGRAC, CC BY-SA 3.0 IGO",
+      "source": "https://ihp-wins.unesco.org/en/dataset/2025-transboundary-aquifers-of-the-world"
     },
     {
       "id": "usgs-principal",

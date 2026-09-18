@@ -33,13 +33,22 @@ from shapely.validation import make_valid
 DEFAULT_TOLERANCE = 0.01
 # Coordinate decimals. 5 is ~1 m, still far finer than the tolerance above.
 COORD_DECIMALS = 5
-# Drop disjoint parts smaller than this, in square degrees. A 0.5 degree cell is
-# 0.25 deg2, so 0.01 is a twenty-fifth of one cell: such a part cannot move an
-# area-weighted mean, and in a fragmented source there are thousands of them.
-# The USGS principal aquifers are drawn valley by valley across the Basin and
-# Range — dissolving those into one region without this produced an unreadable
-# scribble of outlines, while these parts hold under 1% of the area.
-MIN_PART_AREA = 0.01
+# What GRACE can resolve, in square degrees, and the one rule every set is held
+# to. These boundaries exist to be averaged over GRACE cells, so anything the
+# grid cannot separate is not a region here however real it is on the ground.
+#
+# 1.0 deg2 is one cell of the coarser of the two stores. A 3 degree mascon — 9
+# deg2, GRACE's true resolution — was the tempting choice and is wrong: it would
+# exclude the California Central Valley at 5.4 deg2, which is one of the most
+# studied aquifers in the GRACE literature. A region under one cell cannot be
+# separated from its neighbours at all; between one cell and a mascon it is
+# resolved poorly but is still the unit people ask about.
+MIN_AREA = 1.0
+# A region has to survive that filter mostly intact. Below this, what is left is
+# a piece of the aquifer wearing its name — the USGS Pacific Northwest basin-fill
+# is 96 valleys, none of them a cell across, and keeping the largest would label
+# 15% of an aquifer as the whole of it.
+MIN_RETAINED_FRACTION = 0.80
 
 SETS = {
     "grdc-mrb": {
@@ -115,15 +124,21 @@ SETS = {
 }
 
 
-def drop_slivers(geom, min_area):
-    """Disjoint parts too small to matter, removed. Holes are left alone: a hole
-    is part of the shape of the region, not a separate piece of it."""
-    if min_area <= 0 or not hasattr(geom, "geoms"):
+def drop_parts_below(geom, min_area):
+    """Disjoint parts the grid cannot resolve, removed. None when nothing is left.
+
+    Holes are untouched: a hole is part of the shape of a region, not a separate
+    piece of it. Nothing is kept as a consolation prize either — a region made
+    entirely of unresolvable pieces is handled by the caller, which drops it
+    rather than presenting its largest fragment under the whole aquifer's name.
+    """
+    if min_area <= 0:
         return geom
+    if not hasattr(geom, "geoms"):
+        return geom if geom.area >= min_area else None
     kept = [g for g in geom.geoms if g.area >= min_area]
     if not kept:
-        # Everything is small: keep the largest so the region does not vanish.
-        kept = [max(geom.geoms, key=lambda g: g.area)]
+        return None
     return unary_union(kept) if len(kept) > 1 else kept[0]
 
 
@@ -206,14 +221,14 @@ def group_features(features, spec):
         yield props, merged
 
 
-def build(set_id, shp_path, out_dir, tolerance, min_part_area=MIN_PART_AREA):
+def build(set_id, shp_path, out_dir, tolerance, min_area=MIN_AREA):
     spec = SETS[set_id]
     # A set may ask for its own tolerance; an explicit --tolerance still wins.
     if tolerance == DEFAULT_TOLERANCE and "tolerance" in spec:
         tolerance = spec["tolerance"]
     features = []
     seen_ids = set()
-    stats = {"repaired": 0, "unnamed": 0, "filled": 0, "dropped": 0, "slivers": 0, "verts_in": 0, "verts_out": 0}
+    stats = {"repaired": 0, "unnamed": 0, "filled": 0, "dropped": 0, "scattered": 0, "too_small": 0, "slivers": 0, "verts_in": 0, "verts_out": 0}
 
     def count(geom):
         if geom.geom_type == "Polygon":
@@ -232,10 +247,20 @@ def build(set_id, shp_path, out_dir, tolerance, min_part_area=MIN_PART_AREA):
         if simplified.geom_type not in ("Polygon", "MultiPolygon") or simplified.is_empty:
             stats["dropped"] += 1
             continue
+        # The uniform GRACE rule: parts the grid cannot resolve go, and the
+        # region goes too if that left it too small or took too much of it.
+        full_area = simplified.area
         before_parts = len(simplified.geoms) if hasattr(simplified, "geoms") else 1
-        simplified = drop_slivers(simplified, min_part_area)
+        simplified = drop_parts_below(simplified, min_area)
         after_parts = len(simplified.geoms) if hasattr(simplified, "geoms") else 1
         stats["slivers"] += before_parts - after_parts
+
+        if simplified is None or simplified.area < min_area:
+            stats["too_small"] += 1
+            continue
+        if full_area > 0 and simplified.area / full_area < MIN_RETAINED_FRACTION:
+            stats["scattered"] += 1
+            continue
         stats["verts_out"] += count(simplified)
 
         name = next(
@@ -276,7 +301,9 @@ def build(set_id, shp_path, out_dir, tolerance, min_part_area=MIN_PART_AREA):
     print(f"  vertices {stats['verts_in']:,} -> {stats['verts_out']:,} at {tolerance} deg")
     for key, label in (("repaired", "repaired invalid"), ("filled", "named from overrides"),
                        ("unnamed", "still unnamed"), ("dropped", "dropped"),
-                       ("slivers", f"sliver parts dropped (< {min_part_area} deg2)")):
+                       ("too_small", f"dropped: under {min_area} deg2, below one analysis cell"),
+                       ("scattered", f"dropped: under {MIN_RETAINED_FRACTION:.0%} of the aquifer left after filtering"),
+                       ("slivers", f"unresolvable parts removed (< {min_area} deg2)")):
         if stats[key]:
             print(f"  {stats[key]} {label}")
 
@@ -305,8 +332,8 @@ def main():
     parser.add_argument("--out", default=str(Path(__file__).parent.parent / "public" / "regions"))
     parser.add_argument("--tolerance", type=float, default=DEFAULT_TOLERANCE,
                         help=f"simplification tolerance in degrees (default {DEFAULT_TOLERANCE})")
-    parser.add_argument("--min-part-area", type=float, default=MIN_PART_AREA, dest="min_part_area",
-                        help=f"drop disjoint parts below this area in deg2 (default {MIN_PART_AREA})")
+    parser.add_argument("--min-area", type=float, default=MIN_AREA, dest="min_area",
+                        help=f"minimum resolvable area in deg2, for parts and regions (default {MIN_AREA})")
     args = parser.parse_args()
 
     if not args.set_id or not args.shapefile:
@@ -316,7 +343,7 @@ def main():
             print(f"               {spec['source']}")
         sys.exit(0 if not args.set_id else 2)
 
-    build(args.set_id, Path(args.shapefile), Path(args.out), args.tolerance, args.min_part_area)
+    build(args.set_id, Path(args.shapefile), Path(args.out), args.tolerance, args.min_area)
 
 
 if __name__ == "__main__":
