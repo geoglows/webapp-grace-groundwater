@@ -610,12 +610,40 @@ const setRegionSet = async (set) => {
 // view the app opens in.
 let firstRegionSet = true;
 
-// Frame whatever the new set covers, so switching does not leave the camera
-// over a region that is not in it.
-const fitRegionSet = () => {
-  const extent = activeRegionSet.file ? boundaryLayer.fullExtent : uploadedLayer.fullExtent;
-  if (extent) arcgisMap.view?.goTo(extent.clone().expand(1.1)).catch(() => {});
+// The uploads' combined extent, unioned from the graphics themselves.
+// GraphicsLayer.fullExtent is not derived from what the layer holds — it is the
+// whole world until something sets it — so trusting it zoomed the camera past
+// the globe instead of onto the uploads.
+const uploadedExtent = () => {
+  let union = null;
+  for (const graphic of uploadedLayer.graphics) {
+    const extent = graphic.geometry?.extent;
+    if (!extent) continue;
+    union = union ? union.union(extent) : extent.clone();
+  }
+  return union;
 };
+
+// Frame whatever the new set covers, so switching does not leave the camera
+// over a region that is not in it. An empty My Regions has nothing to frame, so
+// the camera is left where it is rather than sent somewhere arbitrary.
+const fitRegionSet = () => {
+  const extent = activeRegionSet.file ? boundaryLayer.fullExtent : uploadedExtent();
+  if (!extent) return;
+  // A single uploaded region can be small enough that its own extent is a
+  // street-level camera, so the fit is floored at a scale that still shows
+  // context around it.
+  const target = extent.clone().expand(1.1);
+  arcgisMap.view?.goTo(target)
+    .then(() => {
+      if (arcgisMap.view.scale < MIN_FIT_SCALE) arcgisMap.view.scale = MIN_FIT_SCALE;
+    })
+    .catch(() => {});
+};
+
+// ~1:2M, a few counties across: closer than this and a small uploaded polygon
+// fills the screen with no idea where on Earth it is.
+const MIN_FIT_SCALE = 2_000_000;
 
 // ---- Trend classification --------------------------------------------------
 // Every region colored by the slope of its own area-mean series, computed off
