@@ -37,6 +37,13 @@
       "file": "usgs-principal.geojson",
       "attribution": "Principal Aquifers of the United States, U.S. Geological Survey (public domain)",
       "source": "https://water.usgs.gov/GIS/metadata/usgswrd/XML/aquifers_us.xml"
+    },
+    {
+      "id": "grdc-mrb",
+      "label": "Major River Basins (GRDC)",
+      "file": "grdc-mrb.geojson",
+      "attribution": "GRDC (2020): Major River Basins of the World, 2nd rev. ed. Koblenz: BfG. Incorporates data from HydroSHEDS (WWF). Non-commercial use only.",
+      "source": "https://grdc.bafg.de/products/basin_layers/major_rivers/"
     }
   ]
 }

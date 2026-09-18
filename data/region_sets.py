@@ -33,8 +33,33 @@ from shapely.validation import make_valid
 DEFAULT_TOLERANCE = 0.01
 # Coordinate decimals. 5 is ~1 m, still far finer than the tolerance above.
 COORD_DECIMALS = 5
+# Drop disjoint parts smaller than this, in square degrees. A 0.5 degree cell is
+# 0.25 deg2, so 0.01 is a twenty-fifth of one cell: such a part cannot move an
+# area-weighted mean, and in a fragmented source there are thousands of them.
+# The USGS principal aquifers are drawn valley by valley across the Basin and
+# Range — dissolving those into one region without this produced an unreadable
+# scribble of outlines, while these parts hold under 1% of the area.
+MIN_PART_AREA = 0.01
 
 SETS = {
+    "grdc-mrb": {
+        "label": "Major River Basins (GRDC)",
+        "name_fields": ["RIVERBASIN"],
+        "id_field": "MRBID",
+        # Non-commercial use only, and the citation has to name HydroSHEDS as an
+        # incorporated source — both stated on the GRDC product page.
+        "attribution": (
+            "GRDC (2020): Major River Basins of the World, 2nd rev. ed. "
+            "Koblenz: BfG. Incorporates data from HydroSHEDS (WWF). "
+            "Non-commercial use only."
+        ),
+        "source": "https://grdc.bafg.de/products/basin_layers/major_rivers/",
+        # 0.04 deg, ~4.4 km. Coarser than the default because these are drainage
+        # divides traced from a 15 arc-second DEM, so they carry hillslope-scale
+        # wiggle that no aquifer outline has: 8.8 MB at the default against 2.3
+        # here, for a boundary still ten times finer than a 0.5 degree cell.
+        "tolerance": 0.04,
+    },
     "usgs-principal": {
         "label": "Principal Aquifers, USA (USGS)",
         "name_fields": ["AQ_NAME"],
@@ -88,6 +113,18 @@ SETS = {
         "source": "https://ihp-wins.unesco.org/en/dataset/2025-transboundary-aquifers-of-the-world",
     },
 }
+
+
+def drop_slivers(geom, min_area):
+    """Disjoint parts too small to matter, removed. Holes are left alone: a hole
+    is part of the shape of the region, not a separate piece of it."""
+    if min_area <= 0 or not hasattr(geom, "geoms"):
+        return geom
+    kept = [g for g in geom.geoms if g.area >= min_area]
+    if not kept:
+        # Everything is small: keep the largest so the region does not vanish.
+        kept = [max(geom.geoms, key=lambda g: g.area)]
+    return unary_union(kept) if len(kept) > 1 else kept[0]
 
 
 def polygonal(geom):
@@ -169,11 +206,14 @@ def group_features(features, spec):
         yield props, merged
 
 
-def build(set_id, shp_path, out_dir, tolerance):
+def build(set_id, shp_path, out_dir, tolerance, min_part_area=MIN_PART_AREA):
     spec = SETS[set_id]
+    # A set may ask for its own tolerance; an explicit --tolerance still wins.
+    if tolerance == DEFAULT_TOLERANCE and "tolerance" in spec:
+        tolerance = spec["tolerance"]
     features = []
     seen_ids = set()
-    stats = {"repaired": 0, "unnamed": 0, "filled": 0, "dropped": 0, "verts_in": 0, "verts_out": 0}
+    stats = {"repaired": 0, "unnamed": 0, "filled": 0, "dropped": 0, "slivers": 0, "verts_in": 0, "verts_out": 0}
 
     def count(geom):
         if geom.geom_type == "Polygon":
@@ -192,6 +232,10 @@ def build(set_id, shp_path, out_dir, tolerance):
         if simplified.geom_type not in ("Polygon", "MultiPolygon") or simplified.is_empty:
             stats["dropped"] += 1
             continue
+        before_parts = len(simplified.geoms) if hasattr(simplified, "geoms") else 1
+        simplified = drop_slivers(simplified, min_part_area)
+        after_parts = len(simplified.geoms) if hasattr(simplified, "geoms") else 1
+        stats["slivers"] += before_parts - after_parts
         stats["verts_out"] += count(simplified)
 
         name = next(
@@ -231,7 +275,8 @@ def build(set_id, shp_path, out_dir, tolerance):
     print(f"{out_path}: {len(features)} regions, {kb:,.0f} KB")
     print(f"  vertices {stats['verts_in']:,} -> {stats['verts_out']:,} at {tolerance} deg")
     for key, label in (("repaired", "repaired invalid"), ("filled", "named from overrides"),
-                       ("unnamed", "still unnamed"), ("dropped", "dropped")):
+                       ("unnamed", "still unnamed"), ("dropped", "dropped"),
+                       ("slivers", f"sliver parts dropped (< {min_part_area} deg2)")):
         if stats[key]:
             print(f"  {stats[key]} {label}")
 
@@ -260,6 +305,8 @@ def main():
     parser.add_argument("--out", default=str(Path(__file__).parent.parent / "public" / "regions"))
     parser.add_argument("--tolerance", type=float, default=DEFAULT_TOLERANCE,
                         help=f"simplification tolerance in degrees (default {DEFAULT_TOLERANCE})")
+    parser.add_argument("--min-part-area", type=float, default=MIN_PART_AREA, dest="min_part_area",
+                        help=f"drop disjoint parts below this area in deg2 (default {MIN_PART_AREA})")
     args = parser.parse_args()
 
     if not args.set_id or not args.shapefile:
@@ -269,7 +316,7 @@ def main():
             print(f"               {spec['source']}")
         sys.exit(0 if not args.set_id else 2)
 
-    build(args.set_id, Path(args.shapefile), Path(args.out), args.tolerance)
+    build(args.set_id, Path(args.shapefile), Path(args.out), args.tolerance, args.min_part_area)
 
 
 if __name__ == "__main__":
