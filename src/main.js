@@ -610,6 +610,14 @@ const applyOutlineVisibility = () => {
 };
 
 const setRegionSet = async (set, {select = true} = {}) => {
+  // Picking a set is a statement about which outlines to work with, and the
+  // whole-world raster covers them — so leave the global view for the one where
+  // the choice has an effect. Before activeRegionSet changes, because
+  // applyOutlineVisibility reads both.
+  if (globalView.active) {
+    exitGlobalView();
+    clearTimeseriesPanel(appInstructions);
+  }
   activeRegionSet = set;
   if (trendState.on) setTrendsOff();
   regionRingsPromise = null;
