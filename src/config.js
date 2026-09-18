@@ -42,10 +42,16 @@ export const ZARR_URL_HALF_DEGREE = fromEnv(
   "https://d3hbj0z0f67zhd.cloudfront.net/ggg/grace-gldas-water-balance-0.5.zarr",
 ).replace(/\/+$/, "");
 
-// Region outlines — the shipped file is the world's major aquifers, but any
-// polygon set works. Served from public/ by default; point VITE_REGIONS_URL at
-// an absolute https:// URL to serve the 2 MB file from a CDN instead.
-export const REGIONS_URL = fromEnv(import.meta.env.VITE_REGIONS_URL, asset("regions.geojson"));
+// The manifest listing the region sets the picker offers; each set's file is
+// resolved next to it. Served from public/ by default; point
+// VITE_REGION_SETS_URL at an absolute https:// URL to serve the sets from a CDN
+// instead, in which case the whole directory moves together.
+export const REGION_SETS_URL = fromEnv(import.meta.env.VITE_REGION_SETS_URL, asset("regions/index.json"));
+
+// A set's file, resolved against the manifest's own location so a set never has
+// to know where the directory ended up.
+export const regionSetUrl = (file) =>
+  /^https?:\/\//i.test(file) ? file : new URL(file, new URL(REGION_SETS_URL, window.location.href)).href;
 
 // The native 3 degree GRACE mascon footprints, written by
 // data/mascon_boundaries.py. Only the 1706 mascons touching land are shipped

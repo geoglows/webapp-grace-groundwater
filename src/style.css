@@ -808,3 +808,25 @@ body.panel-resizing * {
     border-radius: var(--r-sm);
     cursor: pointer;
 }
+
+/* The set picker sits above the filter, both inside the same block, so the
+   region list below starts at a fixed place whichever set is showing. */
+.rfs-set-select {
+    margin-bottom: 8px;
+}
+
+/* Attribution for the showing set. Required by some sources' licenses — IGRAC's
+   CC BY-SA 3.0 IGO among them — so it is part of the layout rather than an
+   optional nicety, pinned below the list where it cannot scroll away. */
+.rfs-attribution {
+    flex: 0 0 auto;
+    padding: 8px 18px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--text-faint);
+    border-top: 1px solid var(--border);
+}
+
+.rfs-attribution.hidden {
+    display: none;
+}

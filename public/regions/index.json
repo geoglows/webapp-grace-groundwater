@@ -1,0 +1,21 @@
+{
+  "_comment": [
+    "The region sets the picker offers, in order. Each `file` is resolved next to",
+    "this manifest. `attribution` is displayed under the region list and must be",
+    "filled in for any set whose license requires it (IGRAC's CC BY-SA 3.0 IGO",
+    "does); null means nothing is shown.",
+    "",
+    "Every set is expected in the app's own schema: one feature per region, with",
+    "`n` (name) and `id` (unique within the set) properties, in WGS84. Converting",
+    "and simplifying a published dataset into that shape belongs in data/, not in",
+    "the app."
+  ],
+  "sets": [
+    {
+      "id": "global-aquifers",
+      "label": "Global Aquifers",
+      "file": "global-aquifers.geojson",
+      "attribution": null
+    }
+  ]
+}

@@ -19,7 +19,7 @@ import * as geodeticAreaOperator from "@arcgis/core/geometry/operators/geodeticA
 import {get} from "zarrita";
 
 import {cellPolygonFromCenter} from "./cells.js";
-import {REGIONS_URL, MASCONS_URL, ZARR_URL, ZARR_URL_HALF_DEGREE} from "./config.js";
+import {MASCONS_URL, REGION_SETS_URL, ZARR_URL, ZARR_URL_HALF_DEGREE, regionSetUrl} from "./config.js";
 import {clearCacheDB, getOrFetchCoords} from "./db.js";
 import {loadGlobalVariable} from "./globalFramesClient.js";
 import {createGlobalRenderer} from "./globalLayer.js";
@@ -227,6 +227,8 @@ const trendLegendDiv = document.getElementById("trend-legend");
 const trendLegendTitle = document.getElementById("trend-legend-title");
 const trendLegendSub = document.getElementById("trend-legend-sub");
 const trendLegendRows = document.getElementById("trend-legend-rows");
+const regionSetSelect = document.getElementById("region-set-select");
+const regionAttribution = document.getElementById("region-attribution");
 const regionList = document.getElementById("region-list");
 const regionFilter = document.getElementById("region-filter");
 const breadcrumb = document.getElementById("breadcrumb");
@@ -534,9 +536,14 @@ const applyBasemapContrast = (basemapId) => {
   for (const g of uploadedLayer.graphics) g.symbol = uploadedSymbolFor(darkBasemap);
 };
 
-const boundaryLayer = new GeoJSONLayer({
+// Every set is a separate file, so switching means a new layer rather than a new
+// URL on the old one: a GeoJSONLayer infers its fields when it loads, and
+// swapping the source under a loaded layer is not something the SDK promises to
+// handle. `boundaryLayer` is therefore rebound rather than mutated. Everything
+// else in this module reads it when it runs, so nothing holds a stale one.
+const makeBoundaryLayer = (url) => new GeoJSONLayer({
   title: "Region Boundaries",
-  url: REGIONS_URL,
+  url,
   outFields: ["*"],
   definitionExpression: "1=1", // start with none selected
   renderer: {type: "simple", symbol: regionSymbolFor(darkBasemap)},
@@ -546,6 +553,69 @@ const boundaryLayer = new GeoJSONLayer({
   labelingInfo: [regionLabelFor(darkBasemap)],
   labelsVisible: displayConfig.showRegionNames,
 });
+
+// The sets from the manifest, plus "My Regions" — the uploads, which have no
+// file and are drawn from IndexedDB instead.
+const MY_REGIONS = {id: "my-regions", label: "My Regions", file: null, attribution: null};
+let regionSets = [MY_REGIONS];
+let activeRegionSet = MY_REGIONS;
+
+// Starts on My Regions, which needs no network, and is replaced the moment the
+// manifest resolves. A layer always exists so nothing has to null-check it.
+let boundaryLayer = makeBoundaryLayer(null);
+
+// Swap the outlines to another set. Everything keyed on a region id belongs to
+// one set — ids collide across them — so the classification, the cached rings
+// and the current selection are all dropped.
+const setRegionSet = async (set) => {
+  activeRegionSet = set;
+  if (trendState.on) setTrendsOff();
+  regionRingsPromise = null;
+  setActiveRegion(null);
+  setBreadcrumb(null);
+
+  const index = arcgisMap.map?.layers?.indexOf(boundaryLayer) ?? -1;
+  const previous = boundaryLayer;
+  boundaryLayer = makeBoundaryLayer(set.file ? regionSetUrl(set.file) : null);
+  boundaryLayer.visible = previous.visible;
+  if (arcgisMap.map) {
+    arcgisMap.map.remove(previous);
+    // Back where it was, so the mascons and the anomaly raster keep their order.
+    if (index >= 0) arcgisMap.map.add(boundaryLayer, index);
+    else arcgisMap.map.add(boundaryLayer);
+  }
+
+  regionAttribution.textContent = set.attribution ?? "";
+  regionAttribution.classList.toggle("hidden", !set.attribution);
+
+  builtinRows = [];
+  paintRegionList();
+  if (!set.file) {
+    // My Regions: nothing to load, the uploads are the set.
+    await loadUserRegions();
+    if (!firstRegionSet) fitRegionSet();
+    firstRegionSet = false;
+    return;
+  }
+  await boundaryLayer.load();
+  await buildRegionList();
+  await loadUserRegions();
+  // Not on the first load: the app opens on the view VITE_DEFAULT_VIEW asks for,
+  // at the camera .env configured, and refitting here would override it.
+  if (!firstRegionSet) fitRegionSet();
+  firstRegionSet = false;
+};
+
+// The initial set is applied during boot, where the camera belongs to whichever
+// view the app opens in.
+let firstRegionSet = true;
+
+// Frame whatever the new set covers, so switching does not leave the camera
+// over a region that is not in it.
+const fitRegionSet = () => {
+  const extent = activeRegionSet.file ? boundaryLayer.fullExtent : uploadedLayer.fullExtent;
+  if (extent) arcgisMap.view?.goTo(extent.clone().expand(1.1)).catch(() => {});
+};
 
 // ---- Trend classification --------------------------------------------------
 // Every region colored by the slope of its own area-mean series, computed off
@@ -573,6 +643,16 @@ const trendState = {
 let regionRingsPromise = null;
 const ensureRegionRings = () => {
   regionRingsPromise ??= (async () => {
+    // My Regions carries its rings already; the classification reads them from
+    // the list rather than from a layer.
+    if (!activeRegionSet.file) {
+      return userRows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        rings: r.rings,
+        extent: ringsExtent(r.rings),
+      }));
+    }
     await boundaryLayer.load();
     const q = boundaryLayer.createQuery();
     q.where = "1=1";
@@ -633,6 +713,41 @@ const countCellCategories = (slopes) => {
 
 // Shared by both modes: the region classification counts regions, the global
 // map counts cells, and the classes are the same either way.
+// The manifest, then the picker. My Regions is appended rather than listed in
+// the file: it is the user's own and has no source to name.
+const loadRegionSets = async () => {
+  const res = await fetch(REGION_SETS_URL, {cache: "no-cache"});
+  if (!res.ok) throw new Error(`Region set manifest: HTTP ${res.status}`);
+  const {sets} = await res.json();
+  if (!Array.isArray(sets) || !sets.length) throw new Error("Region set manifest lists no sets");
+  regionSets = [...sets, MY_REGIONS];
+
+  regionSetSelect.replaceChildren(
+    ...regionSets.map(({id, label}) => {
+      const option = document.createElement("option");
+      option.value = id;
+      option.textContent = label;
+      return option;
+    }),
+  );
+  regionSetSelect.value = regionSets[0].id;
+  return regionSets[0];
+};
+
+// Bounding box of a ring set, for the uploads, which have no layer to ask.
+const ringsExtent = (rings) => {
+  let xmin = Infinity, ymin = Infinity, xmax = -Infinity, ymax = -Infinity;
+  for (const ring of rings) {
+    for (const [x, y] of ring) {
+      if (x < xmin) xmin = x;
+      if (x > xmax) xmax = x;
+      if (y < ymin) ymin = y;
+      if (y > ymax) ymax = y;
+    }
+  }
+  return {xmin, ymin, xmax, ymax};
+};
+
 const renderTrendLegend = ({varName, counts, noun, window}) => {
   const {moderate, extreme} = TREND_THRESHOLDS;
   trendLegendTitle.textContent = `${varName} trend (${UNITS}/yr)`;
@@ -904,17 +1019,22 @@ const regionRowElement = (row) => {
   return {element: wrapper, button};
 };
 
-// Built-ins first, alphabetically, then the uploads — an upload is the user's
-// own and easier to find at a known end of the list than sorted into 81 others.
 let builtinRows = [];
 let userRows = [];
 const paintRegionList = () => {
-  regionRows = [...builtinRows, ...userRows];
+  // Uploads are their own set now, so they list under My Regions rather than
+  // appended to whichever published set happens to be showing.
+  regionRows = activeRegionSet.file ? builtinRows : userRows;
   regionList.replaceChildren(...regionRows.map((r) => r.element));
   applyRegionFilter();
 };
 
 const buildRegionList = async () => {
+  if (!activeRegionSet.file) {
+    builtinRows = [];
+    paintRegionList();
+    return;
+  }
   const q = boundaryLayer.createQuery();
   q.where = "1=1";
   q.outFields = ["id", "n"];
@@ -934,6 +1054,9 @@ const loadUserRegions = async () => {
   const saved = await listUserRegions();
   saved.sort((a, b) => a.addedAt - b.addedAt);
   uploadedLayer.removeAll();
+  // Drawn only while their own set is showing, for the same reason they are
+  // listed only there.
+  uploadedLayer.visible = !activeRegionSet.file;
   userRows = saved.map((rec) => {
     const row = {id: rec.id, name: rec.name, rings: rec.rings, user: true};
     uploadedLayer.add(new Graphic({
@@ -1966,14 +2089,6 @@ const bootMapUi = async () => {
   // before the swap would silently double it (each old level is two new ones).
   arcgisMap.view.goTo({center: MAP_CENTER, zoom: MAP_ZOOM}, {animate: false}).catch(() => {
   });
-  arcgisMap.map.add(boundaryLayer);
-  // Preload the boundaries for later regional use; the camera is set by whichever
-  // view we start in (global by default), so don't fit to the boundary extent here.
-  boundaryLayer.load().then(buildRegionList).catch((err) => {
-    // A panel with no rows is survivable — the outlines are still clickable —
-    // so this reports rather than throwing out of boot.
-    console.error("Could not build the region list", err);
-  });
   // Honors VITE_SETTINGS_SHOW_MASCONS; a no-op unless the deployment starts with
   // the footprints on.
   applyMasconVisibility();
@@ -2176,9 +2291,21 @@ const bootMapUi = async () => {
 
   arcgisMap.map.add(uploadedLayer);
   arcgisMap.map.add(drawLayer);
-  loadUserRegions().catch((err) => {
-    // A missing upload list is survivable; the built-in regions still work.
-    console.error("Could not load the saved regions", err);
+
+  loadRegionSets()
+    .then((first) => setRegionSet(first))
+    .catch(async (err) => {
+      // Without the manifest there is no set to show but the uploads, which are
+      // local and always available. Better than an empty panel.
+      console.error("Could not load the region sets", err);
+      regionSets = [MY_REGIONS];
+      regionSetSelect.replaceChildren(new Option(MY_REGIONS.label, MY_REGIONS.id));
+      await setRegionSet(MY_REGIONS);
+    });
+
+  regionSetSelect.addEventListener("change", (e) => {
+    const set = regionSets.find((s) => s.id === e.target.value);
+    if (set) setRegionSet(set).catch((err) => console.error(`Could not load the ${set.label} regions`, err));
   });
   sketch = new SketchViewModel({
     view: arcgisMap.view,
@@ -2475,6 +2602,11 @@ const bootMapUi = async () => {
       // visit. loadUserRegions draws it and lists it; analyzing it then goes
       // through the same path as clicking its row.
       const saved = await addUserRegion({name, polygon});
+      // The upload belongs to My Regions, so that is where it is shown.
+      if (activeRegionSet.file) {
+        regionSetSelect.value = MY_REGIONS.id;
+        await setRegionSet(MY_REGIONS);
+      }
       const row = regionRows.find((r) => r.id === saved.id);
       await analyzeUserRegion(row ?? {id: saved.id, name, rings: saved.rings, user: true});
     } catch (err) {

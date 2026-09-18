@@ -86,11 +86,14 @@
 
   <p class="rfs-eyebrow">Regions</p>
   <div class="rfs-filter">
+    <select id="region-set-select" class="rfs-select rfs-set-select"></select>
     <input id="region-filter" type="search" class="rfs-input" placeholder="Filter regions&hellip;"
            aria-label="Filter regions" autocomplete="off">
   </div>
   <!-- Filled from the boundary layer once it loads (main.js). -->
   <div id="region-list" class="rfs-list" role="list"></div>
+  <!-- Required by some sources' licenses; the manifest carries the text. -->
+  <p id="region-attribution" class="rfs-attribution hidden"></p>
 </aside>
 
 <main class="flex min-w-0 flex-1 flex-col">
