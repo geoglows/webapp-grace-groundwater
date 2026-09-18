@@ -188,7 +188,14 @@ const timeControlRoot = document.getElementById("time-control");
 // date list, which only exists after the store's time axis has been read.
 let timeControl = null;
 const timeseriesPlotDiv = document.getElementById("timeseries-plot");
-const appInstructions = timeseriesPlotDiv.innerHTML
+const appInstructions = timeseriesPlotDiv.innerHTML;
+
+// The same centred prompt the panel ships with, for the other things the panel
+// has to say. Built from a template rather than repeated so the styling of an
+// empty chart panel lives in index.html and nowhere else.
+const panelPrompt = (text) =>
+  appInstructions.replace(/>[^<>]+</, `>${text}<`);
+const GLOBAL_PROMPT = panelPrompt("Select a cell to view time series");
 
 arcgisMap.basemap = MAP_BASEMAP;
 arcgisMap.center = MAP_CENTER;
@@ -1131,9 +1138,10 @@ const plotPickedCell = async (lon, lat) => {
 
   if (runId !== analysisRunSeq) return;
   if (!series.length) {
-    // Ocean, ice sheet, or a month range with nothing in it.
+    // Ocean, ice sheet, or a month range with nothing in it. Back to the prompt
+    // rather than an empty chart or a panel that shuts on you.
     clearPickedCell();
-    panels.setChartVisible(false);
+    clearTimeseriesPanel(GLOBAL_PROMPT);
     setBreadcrumb("Global map", {home: false});
     return;
   }
@@ -1675,14 +1683,19 @@ const analyzeGlobalView = async ({keepView = false} = {}) => {
   const possiblyExistingLayer = arcgisMap.map.layers.find((l) => l.title === "GRACE Anomalies");
   if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);
   timeControl?.stop();
-  clearTimeseriesPanel();
-  panels.setChartVisible(false);
+  // Open, and saying what to do with it. Closed, nothing told the user a cell
+  // could be clicked at all; a variable toggle keeps whatever is already there.
+  if (!keepView) {
+    clearTimeseriesPanel(GLOBAL_PROMPT);
+    panels.setChartVisible(true);
+  }
 
-  const zoomPromise = keepView ? Promise.resolve() : arcgisMap.view.goTo({
-    center: MAP_CENTER,
-    zoom: MAP_ZOOM,
-  }).catch(() => {
-  });
+  // The camera waits for the chart panel just revealed above to take its space,
+  // for the reason main() does: goTo resolves its target against the viewport it
+  // was handed, so a resize mid-flight re-aims the animation.
+  const zoomPromise = keepView
+    ? Promise.resolve()
+    : afterLayout().then(() => arcgisMap.view.goTo({center: MAP_CENTER, zoom: MAP_ZOOM})).catch(() => {});
 
   if (!globalView.renderer) globalView.renderer = createGlobalRenderer({title: "GRACE Anomalies (Global)"});
   if (!arcgisMap.map.layers.includes(globalView.renderer.layer)) {
