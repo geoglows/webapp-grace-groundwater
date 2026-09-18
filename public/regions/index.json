@@ -23,6 +23,20 @@
       "file": "igrac-tba.geojson",
       "attribution": "Transboundary Aquifers of the World 2025 \u00a9 UNESCO-IHP / IGRAC, CC BY-SA 3.0 IGO",
       "source": "https://ihp-wins.unesco.org/en/dataset/2025-transboundary-aquifers-of-the-world"
+    },
+    {
+      "id": "whymap-lgas",
+      "label": "Large Aquifer Systems (WHYMAP)",
+      "file": "whymap-lgas.geojson",
+      "attribution": "Large Aquifer Systems of the World, WHYMAP (BGR/UNESCO), via UNESCO IHP-WINS",
+      "source": "https://ihp-wins.unesco.org/dataset/large-aquifer-systems-of-the-world"
+    },
+    {
+      "id": "usgs-principal",
+      "label": "Principal Aquifers, USA (USGS)",
+      "file": "usgs-principal.geojson",
+      "attribution": "Principal Aquifers of the United States, U.S. Geological Survey (public domain)",
+      "source": "https://water.usgs.gov/GIS/metadata/usgswrd/XML/aquifers_us.xml"
     }
   ]
 }

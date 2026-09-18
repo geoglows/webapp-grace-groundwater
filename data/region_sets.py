@@ -35,6 +35,47 @@ DEFAULT_TOLERANCE = 0.01
 COORD_DECIMALS = 5
 
 SETS = {
+    "usgs-principal": {
+        "label": "Principal Aquifers, USA (USGS)",
+        "name_fields": ["AQ_NAME"],
+        "id_field": "AQ_CODE",
+        # One aquifer is drawn as many polygons — the coastal lowlands system
+        # alone is 356 — so features are unioned by aquifer code into one region
+        # each, which is also what "no interior boundaries" requires.
+        "dissolve_by": "AQ_CODE",
+        # A catch-all for everything that is not a principal aquifer. It is not a
+        # region and would be the largest entry in the list.
+        "exclude_ids": [999],
+        "attribution": "Principal Aquifers of the United States, U.S. Geological Survey (public domain)",
+        "source": "https://water.usgs.gov/GIS/metadata/usgswrd/XML/aquifers_us.xml",
+    },
+    "whymap-lgas": {
+        "label": "Large Aquifer Systems (WHYMAP)",
+        "name_fields": ["Aquifer_sy"],
+        "id_field": "HYGEO",
+        # Five of the 37 have a null name in the shapefile. HYGEO is the WHYMAP
+        # number every published map of this set is labelled with, so the gaps
+        # are filled from the literature rather than left as "Unnamed".
+        #   8, 11, 12  read from Cuthbert et al. 2020 (ESD 11, 755), which writes
+        #              them as "Name-number" in its text
+        #   14         from the same paper's Table 1
+        #   15         inferred: it is the only unaccounted number, the paper
+        #              names the Cambrian-Ordovician system among the 37, and
+        #              this polygon sits over Wisconsin/Illinois/Iowa where that
+        #              aquifer is. Confirm against WHYMAP before relying on it.
+        "name_overrides": {
+            8: "Umm Ruwaba Aquifer (Sudd Basin)",
+            11: "Upper Kalahari-Cuvelai-Zambezi Basin",
+            12: "Lower Kalahari-Stampriet Basin",
+            14: "Northern Great Plains Aquifer",
+            15: "Cambro-Ordovician Aquifer System",
+        },
+        "attribution": (
+            "Large Aquifer Systems of the World, WHYMAP (BGR/UNESCO), "
+            "via UNESCO IHP-WINS"
+        ),
+        "source": "https://ihp-wins.unesco.org/dataset/large-aquifer-systems-of-the-world",
+    },
     "igrac-tba": {
         "label": "Transboundary Aquifers (IGRAC)",
         # name_eng is populated for only 40 of the 426; `name` carries the rest.
@@ -99,18 +140,47 @@ def read_features(shp_path):
         yield feature.items(), shape(json.loads(geom.ExportToJson()))
 
 
+def group_features(features, spec):
+    """Union features that belong to the same region, when a set needs it.
+
+    Some sources draw one aquifer as hundreds of polygons. Those are parts of a
+    region, not regions, so they are dissolved before anything else — simplifying
+    first would waste the work and leave seams between neighbouring parts.
+    """
+    key = spec.get("dissolve_by")
+    excluded = set(spec.get("exclude_ids", []))
+    if not key:
+        for props, geom in features:
+            if props.get(spec["id_field"]) not in excluded:
+                yield props, geom
+        return
+
+    groups = {}
+    for props, geom in features:
+        gid = props.get(key)
+        if gid in excluded:
+            continue
+        if gid in groups:
+            groups[gid][1].append(geom)
+        else:
+            groups[gid] = (props, [geom])
+    for props, geoms in groups.values():
+        merged = unary_union(geoms) if len(geoms) > 1 else geoms[0]
+        yield props, merged
+
+
 def build(set_id, shp_path, out_dir, tolerance):
     spec = SETS[set_id]
     features = []
     seen_ids = set()
-    stats = {"repaired": 0, "unnamed": 0, "dropped": 0, "verts_in": 0, "verts_out": 0}
+    stats = {"repaired": 0, "unnamed": 0, "filled": 0, "dropped": 0, "verts_in": 0, "verts_out": 0}
 
     def count(geom):
         if geom.geom_type == "Polygon":
             return len(geom.exterior.coords) + sum(len(i.coords) for i in geom.interiors)
         return sum(count(g) for g in geom.geoms) if hasattr(geom, "geoms") else 0
 
-    for props, geom in read_features(shp_path):
+    for props, geom in group_features(read_features(shp_path), spec):
         if not geom.is_valid:
             stats["repaired"] += 1
             geom = polygonal(make_valid(geom)) or geom
@@ -128,6 +198,10 @@ def build(set_id, shp_path, out_dir, tolerance):
             (str(props[f]).strip() for f in spec["name_fields"] if (props.get(f) or "").strip()),
             None,
         )
+        if name is None:
+            name = spec.get("name_overrides", {}).get(props.get(spec["id_field"]))
+            if name:
+                stats["filled"] += 1
         if name is None:
             stats["unnamed"] += 1
             name = f"Unnamed ({props.get(spec['id_field'])})"
@@ -156,7 +230,8 @@ def build(set_id, shp_path, out_dir, tolerance):
     kb = out_path.stat().st_size / 1024
     print(f"{out_path}: {len(features)} regions, {kb:,.0f} KB")
     print(f"  vertices {stats['verts_in']:,} -> {stats['verts_out']:,} at {tolerance} deg")
-    for key, label in (("repaired", "repaired invalid"), ("unnamed", "unnamed"), ("dropped", "dropped")):
+    for key, label in (("repaired", "repaired invalid"), ("filled", "named from overrides"),
+                       ("unnamed", "still unnamed"), ("dropped", "dropped")):
         if stats[key]:
             print(f"  {stats[key]} {label}")
 
