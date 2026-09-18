@@ -15,7 +15,7 @@
       "id": "global-aquifers",
       "label": "Global Aquifers",
       "file": "global-aquifers.geojson",
-      "attribution": null
+      "attribution": "Original source unrecorded; gaps filled from Large Aquifer Systems of the World, WHYMAP (BGR/UNESCO). Features added that way carry src=WHYMAP."
     },
     {
       "id": "whymap-lgas",

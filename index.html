@@ -342,10 +342,15 @@
   </button>
   <div id="basemap-menu" class="basemap-menu" role="menu" hidden></div>
 </div>
-<div id="draw-control" class="draw-control absolute">
+<!-- Shown only while My Regions is the active set (applyOutlineVisibility). -->
+<div id="draw-control" class="draw-control absolute hidden">
   <style>
       /* Custom properties inherit through the shadow boundary, so the tokens on
          :root still resolve here even though style.css's selectors do not. */
+      .draw-control.hidden {
+          display: none;
+      }
+
       .draw-control button {
           display: flex;
           align-items: center;

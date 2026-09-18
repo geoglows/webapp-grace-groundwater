@@ -579,6 +579,11 @@ const applyOutlineVisibility = () => {
   const showOutlines = !globalView.active; // the whole-world raster covers them
   boundaryLayer.visible = showOutlines && Boolean(activeRegionSet.file);
   uploadedLayer.visible = showOutlines && !activeRegionSet.file;
+  // Drawing belongs to My Regions: a sketch is a region of the user's own, and
+  // the published sets are not theirs to add to. Hidden rather than disabled,
+  // since there is nothing to explain — it simply is not part of those sets.
+  drawControl.classList.toggle("hidden", Boolean(activeRegionSet.file) || globalView.active);
+  if (activeRegionSet.file && sketch?.state === "active") sketch.cancel();
 };
 
 const setRegionSet = async (set, {select = true} = {}) => {
