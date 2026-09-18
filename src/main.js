@@ -567,7 +567,10 @@ let boundaryLayer = makeBoundaryLayer(null);
 // Swap the outlines to another set. Everything keyed on a region id belongs to
 // one set — ids collide across them — so the classification, the cached rings
 // and the current selection are all dropped.
-const setRegionSet = async (set) => {
+// select:false for a caller that is about to analyze something itself — the
+// upload flow, which knows exactly which region it wants and would otherwise
+// have the auto-select run the same analysis first.
+const setRegionSet = async (set, {select = true} = {}) => {
   activeRegionSet = set;
   if (trendState.on) setTrendsOff();
   regionRingsPromise = null;
@@ -595,7 +598,7 @@ const setRegionSet = async (set) => {
   if (!set.file) {
     // My Regions: nothing to load, the uploads are the set.
     await loadUserRegions();
-    if (!firstRegionSet) fitRegionSet();
+    if (!firstRegionSet && select) fitOrSelectRegionSet();
     firstRegionSet = false;
     return;
   }
@@ -604,7 +607,7 @@ const setRegionSet = async (set) => {
   await loadUserRegions();
   // Not on the first load: the app opens on the view VITE_DEFAULT_VIEW asks for,
   // at the camera .env configured, and refitting here would override it.
-  if (!firstRegionSet) fitRegionSet();
+  if (!firstRegionSet && select) fitOrSelectRegionSet();
   firstRegionSet = false;
 };
 
@@ -624,6 +627,18 @@ const uploadedExtent = () => {
     union = union ? union.union(extent) : extent.clone();
   }
   return union;
+};
+
+// A set with exactly one region analyzes it rather than framing it and waiting
+// to be clicked: there is nothing else in the set to choose, so the click would
+// only be ceremony. The analysis fits the camera itself, so this replaces the
+// fit rather than following it.
+const fitOrSelectRegionSet = () => {
+  if (regionRows.length === 1) {
+    activateRegionRow(regionRows[0]);
+    return;
+  }
+  fitRegionSet();
 };
 
 // Frame whatever the new set covers, so switching does not leave the camera
@@ -1019,6 +1034,9 @@ const setBreadcrumb = (label, {home = true} = {}) => {
 // One row, built the same way whichever kind of region it is. `user` rows carry
 // their own geometry and a remove control; built-in rows are analyzed by id out
 // of the boundary layer.
+const activateRegionRow = (row) =>
+  row.user ? analyzeUserRegion(row) : analyzeGlobalRegion({regionId: row.id, name: row.name});
+
 const regionRowElement = (row) => {
   const button = document.createElement("button");
   button.type = "button";
@@ -1028,10 +1046,7 @@ const regionRowElement = (row) => {
   button.setAttribute("role", "listitem");
   button.setAttribute("aria-current", "false");
   if (row.user) button.dataset.user = "true";
-  button.addEventListener("click", () => {
-    if (row.user) analyzeUserRegion(row);
-    else analyzeGlobalRegion({regionId: row.id, name: row.name});
-  });
+  button.addEventListener("click", () => activateRegionRow(row));
   if (!row.user) return {element: button, button};
 
   // Uploads accumulate with nothing to remove them otherwise, and this is the
@@ -2653,7 +2668,7 @@ const bootMapUi = async () => {
       // The upload belongs to My Regions, so that is where it is shown.
       if (activeRegionSet.file) {
         regionSetSelect.value = MY_REGIONS.id;
-        await setRegionSet(MY_REGIONS);
+        await setRegionSet(MY_REGIONS, {select: false});
       }
       const row = regionRows.find((r) => r.id === saved.id);
       await analyzeUserRegion(row ?? {id: saved.id, name, rings: saved.rings, user: true});
