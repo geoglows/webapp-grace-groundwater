@@ -7,12 +7,21 @@ import minus from "heroicons/24/outline/minus.svg?raw";
 import pause from "heroicons/24/solid/pause.svg?raw";
 import pencil from "heroicons/24/outline/pencil.svg?raw";
 import plus from "heroicons/24/outline/plus.svg?raw";
-import presentationChartLine from "heroicons/24/outline/presentation-chart-line.svg?raw";
 import square3Stack3d from "heroicons/24/outline/square-3-stack-3d.svg?raw";
 import play from "heroicons/24/solid/play.svg?raw";
 import xMark from "heroicons/24/outline/x-mark.svg?raw";
 
+// The pulse line aquiferx puts on its Analyze Trends button — lucide's
+// "activity" glyph, written out here rather than pulled from the package, since
+// it is the only icon this app would take from it. Shaped like the heroicons
+// around it: 24 box, currentColor stroke, round joins, so it sits at the same
+// visual weight.
+const activity = `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true">
+  <path stroke-linecap="round" stroke-linejoin="round" d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+</svg>`;
+
 const ICONS = {
+  activity,
   "arrow-up-tray": arrowUpTray,
   "cloud-arrow-up": cloudArrowUp,
   "cog-6-tooth": cog6Tooth,
@@ -23,7 +32,6 @@ const ICONS = {
   pencil,
   play,
   plus,
-  "presentation-chart-line": presentationChartLine,
   "square-3-stack-3d": square3Stack3d,
   "x-mark": xMark,
 };
