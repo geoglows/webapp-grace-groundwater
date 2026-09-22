@@ -725,7 +725,12 @@ const trendState = {
   // Years back from the newest month, or null for the whole record. A shorter
   // window answers a different question — what storage has been doing lately,
   // rather than over the mission — and the two can disagree in sign.
-  years: null,
+  //
+  // Opens at the shortest window, because recent behaviour is the usual question
+  // and a 24 year fit flattens anything that has turned around. Changing it
+  // sticks: turning trends off and on again keeps the window last chosen, and a
+  // record too short for 5 years falls back to All when the stepper is painted.
+  years: 5,
   byRegion: new Map(), // region id -> category
 };
 
