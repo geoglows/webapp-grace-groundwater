@@ -798,6 +798,47 @@ body.panel-resizing * {
     display: none;
 }
 
+/* A stepper rather than a dropdown: the windows are an ordered run of lengths,
+   so nudging along it beats opening a menu to move one notch. */
+.rfs-step {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 20px;
+    width: 20px;
+    padding: 0;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--text-dim);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    transition: 0.12s;
+}
+
+.rfs-step:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.rfs-step:disabled {
+    cursor: default;
+    opacity: 0.35;
+}
+
+/* Fixed width and tabular figures so the buttons do not shuffle sideways as the
+   label goes from "5 yr" to "All". */
+.rfs-step-value {
+    min-width: 46px;
+    text-align: center;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+}
+
 .rfs-crumbs-select {
     padding: 4px 6px;
     font: inherit;

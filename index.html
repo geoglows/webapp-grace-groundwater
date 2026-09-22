@@ -107,10 +107,12 @@
 
     <!-- Right of the trail: trends act on whatever the trail names. -->
     <div class="rfs-crumbs-actions">
-      <label id="trend-window" class="rfs-crumbs-field hidden" for="trend-window-select">
+      <div id="trend-window" class="rfs-crumbs-field hidden">
         <span>Window</span>
-        <select id="trend-window-select" class="rfs-crumbs-select"></select>
-      </label>
+        <button id="trend-window-down" class="rfs-step" type="button" aria-label="Shorter trend window">&minus;</button>
+        <span id="trend-window-value" class="rfs-step-value"></span>
+        <button id="trend-window-up" class="rfs-step" type="button" aria-label="Longer trend window">+</button>
+      </div>
       <button id="trends-button" class="rfs-crumbs-btn" type="button" aria-pressed="false">
         <span data-icon="presentation-chart-line" aria-hidden="true"></span><span data-trends-label>Analyze trends</span>
       </button>

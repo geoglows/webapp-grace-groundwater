@@ -231,7 +231,9 @@ const legendToggle = document.getElementById("legend-toggle");
 const seriesToggles = document.getElementById("series-toggles");
 const trendsButton = document.getElementById("trends-button");
 const trendWindowField = document.getElementById("trend-window");
-const trendWindowSelect = document.getElementById("trend-window-select");
+const trendWindowValue = document.getElementById("trend-window-value");
+const trendWindowDown = document.getElementById("trend-window-down");
+const trendWindowUp = document.getElementById("trend-window-up");
 const trendsLabel = document.querySelector("[data-trends-label]");
 const trendLegendDiv = document.getElementById("trend-legend");
 const trendLegendTitle = document.getElementById("trend-legend-title");
@@ -762,9 +764,22 @@ const ensureRegionRings = () => {
   return regionRingsPromise;
 };
 
-// The window offered in the strip. The record starts in 2002-04, so "All" is
-// around 24 years and the shorter options are the ones that fit inside it.
-const TREND_WINDOWS = [5, 10, 15, 20];
+// The windows the stepper walks, shortest first, ending at the whole record —
+// 5, 10, 15, 20, All on a 24 year record. Five year steps because a trend over
+// GRACE moves slowly enough that a shorter nudge says nothing, and the last
+// step jumps to the full span rather than stopping at an arbitrary multiple
+// short of it.
+const TREND_WINDOW_STEP = 5;
+const MS_PER_YEAR = 365.25 * 86400000;
+
+const trendWindowOptions = () => {
+  if (!timeDates?.length) return [null];
+  const span = (timeDates[timeDates.length - 1] - timeDates[0]) / MS_PER_YEAR;
+  const steps = [];
+  for (let y = TREND_WINDOW_STEP; y < span; y += TREND_WINDOW_STEP) steps.push(y);
+  steps.push(null); // the whole record, however long it happens to be
+  return steps;
+};
 
 // Set in bootMapUi: fills the window dropdown, which cannot be built until the
 // time axis is known. Held as a hook because the dropdown lives with the other
@@ -2517,34 +2532,36 @@ const bootMapUi = async () => {
 
   // Trends replace the region outlines' fill, so the two cannot be shown at
   // once. Pressing again restores the plain symbology.
-  // Options are built once the time axis is known, so "All" can name the real
-  // first and last year rather than a guess.
+  // Paint the stepper from the current window, and grey the ends. Called once
+  // the time axis has resolved, since the run of windows depends on how long the
+  // record is, and again after each step.
   const fillTrendWindows = () => {
-    if (!timeDates?.length) return;
-    const span = timeDates[timeDates.length - 1].getFullYear() - timeDates[0].getFullYear();
-    const options = [
-      {value: "", label: `All (${timeDates[0].getFullYear()}\u2013${timeDates[timeDates.length - 1].getFullYear()})`},
-      // Only the windows that fit inside the record; a 20 year option on 12
-      // years of data would silently mean the same as All.
-      ...TREND_WINDOWS.filter((y) => y < span).reverse().map((y) => ({value: String(y), label: `Last ${y} years`})),
-    ];
-    trendWindowSelect.replaceChildren(
-      ...options.map(({value, label}) => {
-        const option = document.createElement("option");
-        option.value = value;
-        option.textContent = label;
-        return option;
-      }),
-    );
-    trendWindowSelect.value = trendState.years ? String(trendState.years) : "";
+    const options = trendWindowOptions();
+    let i = options.indexOf(trendState.years);
+    if (i < 0) {
+      // A window longer than the record — or the first paint — lands on All.
+      trendState.years = null;
+      i = options.length - 1;
+    }
+    trendWindowValue.textContent = trendState.years ? `${trendState.years} yr` : "All";
+    trendWindowDown.disabled = i === 0;
+    trendWindowUp.disabled = i === options.length - 1;
   };
 
-  trendWindowSelect.addEventListener("change", (e) => {
-    trendState.years = e.target.value ? Number(e.target.value) : null;
+  const stepTrendWindow = (delta) => {
+    const options = trendWindowOptions();
+    const i = options.indexOf(trendState.years);
+    const next = options[Math.min(options.length - 1, Math.max(0, (i < 0 ? options.length - 1 : i) + delta))];
+    if (next === trendState.years) return;
+    trendState.years = next;
+    fillTrendWindows();
     if (!trendState.on || trendState.running) return;
     if (trendState.mode === "global") runGlobalTrends();
     else runTrends();
-  });
+  };
+
+  trendWindowDown.addEventListener("click", () => stepTrendWindow(-1));
+  trendWindowUp.addEventListener("click", () => stepTrendWindow(1));
 
   // Both fits call this once the time axis has resolved.
   onTrendWindowsReady = fillTrendWindows;
