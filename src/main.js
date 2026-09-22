@@ -570,8 +570,13 @@ const applyBasemapContrast = (basemapId) => {
 // enough to see and click.
 const regionSymbolDimmed = (dark) => ({
   type: "simple-fill",
-  color: [0, 0, 0, 0],
-  outline: {color: dark ? [250, 204, 21, 0.3] : [30, 64, 175, 0.28], width: 0.75},
+  // A grey wash rather than an outline alone. Unfilled, a thin low-opacity line
+  // was invisible against a busy basemap, which defeats the point of leaving the
+  // other regions on the map at all: they have to be findable to be clickable.
+  // Grey because it reads as "not the subject" against the blue and amber the
+  // active region and the anomaly scale use.
+  color: dark ? [148, 163, 184, 0.22] : [100, 116, 139, 0.2],
+  outline: {color: dark ? [203, 213, 225, 0.65] : [51, 65, 85, 0.6], width: 1},
 });
 
 const regionSymbolActive = (dark) => ({
@@ -949,10 +954,7 @@ const paintUploadedSymbols = () => {
     // The same emphasis the published sets get: the analyzed upload keeps its
     // green, the rest step back but stay clickable.
     const dimmed = activeRegionId !== null && String(id) !== activeRegionId;
-    const base = uploadedSymbolFor(darkBasemap);
-    graphic.symbol = dimmed
-      ? {...base, color: [0, 0, 0, 0], outline: {...base.outline, width: 0.75, color: [...base.outline.color.slice(0, 3), 0.3]}}
-      : base;
+    graphic.symbol = dimmed ? regionSymbolDimmed(darkBasemap) : uploadedSymbolFor(darkBasemap);
   }
 };
 
