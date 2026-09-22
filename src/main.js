@@ -664,6 +664,9 @@ const setRegionSet = async (set, {select = true} = {}) => {
   regionRingsPromise = null;
   setActiveRegion(null);
   setBreadcrumb(null);
+  // An analysis belongs to the region it was run for, and that region is not in
+  // the new set.
+  clearAnalysis();
 
   const index = arcgisMap.map?.layers?.indexOf(boundaryLayer) ?? -1;
   const previous = boundaryLayer;
@@ -2436,24 +2439,37 @@ const main = async ({polygon, zoomTarget}) => {
   await renderVariable({keepSlider: false});
 }
 
-const resetLayers = () => {
-  exitGlobalView();
-  setActiveRegion(null);
-  setBreadcrumb(null);
+/**
+ * Take back down everything an analysis put on the screen: the anomaly raster,
+ * the chart, the animation control, and the handlers that redraw them.
+ *
+ * Its own function because two things need it and only one used to do it. Home
+ * cleared an analysis; switching region sets did not, so the previous set's
+ * raster stayed on the map under the new set's outlines with its time series
+ * still in the panel.
+ */
+const clearAnalysis = () => {
   analysisRunSeq++; // abandon any in-flight regional analysis
   regionalVariableHandler = null;
   regionalSeriesHandler = null;
   lastAnalyzedPolygon = null;
   drawLayer.removeAll(); // the sketch is scratch; uploadedLayer is not touched
+  timeControl?.hide();
+  clearTimeseriesPanel(appInstructions);
+  const anomalyLayer = arcgisMap.map?.layers?.find((l) => l.title === "GRACE Anomalies");
+  if (anomalyLayer) arcgisMap.map.layers.remove(anomalyLayer);
+};
+
+const resetLayers = () => {
+  exitGlobalView();
+  setActiveRegion(null);
+  setBreadcrumb(null);
+  clearAnalysis();
   applyOutlineVisibility();
   boundaryLayer.definitionExpression = "1=1"; // reset to none selected
   // The same fit the set picker uses: boundaryLayer.fullExtent is the whole
   // world for a fileless set, which sent Home past the globe.
   fitRegionSet();
-  timeControl?.hide();
-  clearTimeseriesPanel(appInstructions);
-  const possiblyExistingLayer = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
-  if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);
 }
 
 // Build a custom set of zoom levels (LODs) at half-step increments. The default
