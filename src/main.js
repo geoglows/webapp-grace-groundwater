@@ -944,11 +944,7 @@ const paintUploadedSymbols = () => {
     const id = graphic.attributes?.regionId;
     const cat = showingTrends ? trendState.byRegion.get(id) : null;
     if (cat) {
-      graphic.symbol = {
-        type: "simple-fill",
-        color: [...hexToRgb(cat.color), 0.55],
-        outline: {color: darkBasemap ? [255, 255, 255, 0.5] : [30, 41, 59, 0.55], width: 1.5},
-      };
+      graphic.symbol = trendSymbolFor(cat, String(id) === activeRegionId, activeRegionId !== null);
       continue;
     }
     // The same emphasis the published sets get: the analyzed upload keeps its
@@ -958,26 +954,54 @@ const paintUploadedSymbols = () => {
   }
 };
 
+/**
+ * How a classified region is drawn.
+ *
+ * With nothing being analyzed the fills carry the classification and sit at full
+ * strength. Once a region is analyzed the picture has to serve two things at
+ * once, so the emphasis shifts: the analyzed region drops its fill entirely,
+ * because its anomaly cells are underneath and a 55% wash over them hid the very
+ * raster the analysis produced, and keeps its class in a heavy outline instead.
+ * The others keep their class colour at a third of the opacity — still legible
+ * as a classification, no longer competing with the cells.
+ */
+const trendSymbolFor = (cat, isActive, analyzing) => {
+  const rgb = hexToRgb(cat.color);
+  if (isActive) {
+    return {
+      type: "simple-fill",
+      color: [0, 0, 0, 0],
+      outline: {color: [...rgb, 1], width: 3},
+    };
+  }
+  return {
+    type: "simple-fill",
+    color: [...rgb, analyzing ? 0.3 : 0.55],
+    outline: {
+      color: darkBasemap ? [255, 255, 255, analyzing ? 0.25 : 0.5] : [30, 41, 59, analyzing ? 0.3 : 0.55],
+      width: 0.75,
+    },
+  };
+};
+
 const applyTrendRenderer = () => {
   // My Regions has no features to render — its outlines are on uploadedLayer —
   // so the classification is painted there instead. Without this the trend ran,
   // the legend filled in, and nothing on the map changed.
   paintUploadedSymbols();
+  const analyzing = activeRegionId !== null;
   boundaryLayer.renderer = {
     type: "unique-value",
     field: "id",
+    // Unclassified regions: grey either way, fainter while one is analyzed.
     defaultSymbol: {
       type: "simple-fill",
-      color: [100, 116, 139, 0.18],
+      color: [100, 116, 139, analyzing ? 0.1 : 0.18],
       outline: {color: INSUFFICIENT.color, width: 1},
     },
     uniqueValueInfos: [...trendState.byRegion].map(([id, cat]) => ({
       value: id,
-      symbol: {
-        type: "simple-fill",
-        color: [...hexToRgb(cat.color), 0.55],
-        outline: {color: darkBasemap ? [255, 255, 255, 0.5] : [30, 41, 59, 0.55], width: 0.75},
-      },
+      symbol: trendSymbolFor(cat, String(id) === activeRegionId, analyzing),
     })),
   };
 };
