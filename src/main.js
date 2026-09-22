@@ -549,9 +549,7 @@ const applyBasemapContrast = (basemapId) => {
   darkBasemap = isDarkBasemap(basemapId);
   // Trends own the region fill while they are showing, so they are recolored
   // rather than replaced.
-  boundaryLayer.renderer = trendState.on
-    ? (applyTrendRenderer(), boundaryLayer.renderer)
-    : {type: "simple", symbol: regionSymbolFor(darkBasemap)};
+  applyRegionRenderer();
   boundaryLayer.labelingInfo = [regionLabelFor(darkBasemap)];
   masconLayer.renderer = masconRenderer();
   paintUploadedSymbols();
@@ -566,6 +564,42 @@ const applyBasemapContrast = (basemapId) => {
 // swapping the source under a loaded layer is not something the SDK promises to
 // handle. `boundaryLayer` is therefore rebound rather than mutated. Everything
 // else in this module reads it when it runs, so nothing holds a stale one.
+// Analyzing a region used to hide the rest with a definitionExpression, which
+// left no way to switch except going Home first. They stay drawn and step back
+// instead: faint enough not to compete with the anomaly cells underneath, solid
+// enough to see and click.
+const regionSymbolDimmed = (dark) => ({
+  type: "simple-fill",
+  color: [0, 0, 0, 0],
+  outline: {color: dark ? [250, 204, 21, 0.3] : [30, 64, 175, 0.28], width: 0.75},
+});
+
+const regionSymbolActive = (dark) => ({
+  type: "simple-fill",
+  color: [0, 0, 0, 0], // the anomaly cells fill it; a tint on top would muddy them
+  outline: {color: dark ? [253, 224, 71, 1] : [30, 58, 138, 1], width: 2.5},
+});
+
+// One place decides how the outlines are drawn, because three things want a say:
+// whether a classification is showing, which region is being analyzed, and the
+// basemap's brightness.
+const applyRegionRenderer = () => {
+  if (trendState.on && trendState.mode === "region") {
+    applyTrendRenderer();
+    return;
+  }
+  if (activeRegionId === null) {
+    boundaryLayer.renderer = {type: "simple", symbol: regionSymbolFor(darkBasemap)};
+    return;
+  }
+  boundaryLayer.renderer = {
+    type: "unique-value",
+    field: "id",
+    defaultSymbol: regionSymbolDimmed(darkBasemap),
+    uniqueValueInfos: [{value: activeRegionId, symbol: regionSymbolActive(darkBasemap)}],
+  };
+};
+
 const makeBoundaryLayer = (url) => new GeoJSONLayer({
   title: "Region Boundaries",
   url,
@@ -902,14 +936,23 @@ const renderTrendLegend = ({varName, counts, noun, window}) => {
 const paintUploadedSymbols = () => {
   const showingTrends = trendState.on && trendState.mode === "region";
   for (const graphic of uploadedLayer.graphics) {
-    const cat = showingTrends ? trendState.byRegion.get(graphic.attributes?.regionId) : null;
-    graphic.symbol = cat
-      ? {
+    const id = graphic.attributes?.regionId;
+    const cat = showingTrends ? trendState.byRegion.get(id) : null;
+    if (cat) {
+      graphic.symbol = {
         type: "simple-fill",
         color: [...hexToRgb(cat.color), 0.55],
         outline: {color: darkBasemap ? [255, 255, 255, 0.5] : [30, 41, 59, 0.55], width: 1.5},
-      }
-      : uploadedSymbolFor(darkBasemap);
+      };
+      continue;
+    }
+    // The same emphasis the published sets get: the analyzed upload keeps its
+    // green, the rest step back but stay clickable.
+    const dimmed = activeRegionId !== null && String(id) !== activeRegionId;
+    const base = uploadedSymbolFor(darkBasemap);
+    graphic.symbol = dimmed
+      ? {...base, color: [0, 0, 0, 0], outline: {...base.outline, width: 0.75, color: [...base.outline.color.slice(0, 3), 0.3]}}
+      : base;
   }
 };
 
@@ -944,7 +987,7 @@ const setTrendsOff = () => {
   trendState.mode = null;
   trendState.varName = null;
   trendState.byRegion.clear();
-  boundaryLayer.renderer = {type: "simple", symbol: regionSymbolFor(darkBasemap)};
+  applyRegionRenderer(); // back to plain, or to the analyzed region emphasized
   paintUploadedSymbols(); // back to green now that byRegion is empty
   trendLegendDiv.classList.add("hidden");
   trendWindowField.classList.add("hidden");
@@ -1257,13 +1300,19 @@ const plotPickedCell = async (lon, lat) => {
 // same analysis clicking the polygon does.
 let regionRows = []; // {id, name, button}, in the order they are shown
 
+// The region being analyzed, or null. The map reads it to decide what to
+// emphasize, so it is module state rather than a detail of the list.
+let activeRegionId = null;
+
 const setActiveRegion = (regionId) => {
-  const active = regionId == null ? null : String(regionId);
+  activeRegionId = regionId == null ? null : String(regionId);
   for (const row of regionRows) {
-    const isActive = active !== null && String(row.id) === active;
+    const isActive = activeRegionId !== null && String(row.id) === activeRegionId;
     row.button.setAttribute("aria-current", isActive ? "true" : "false");
     if (isActive) row.button.scrollIntoView({block: "nearest"});
   }
+  applyRegionRenderer();
+  paintUploadedSymbols();
 };
 
 // The trailing crumb names whatever is being analyzed — a region, a drawn
@@ -1482,11 +1531,9 @@ const analyzeGlobalRegion = async ({regionId, name}) => {
   setBreadcrumb(name ?? regionRows.find((r) => String(r.id) === String(regionId))?.name ?? "Region");
   await boundaryLayer.load();
 
-  // Show only the picked region. definitionExpression filters the features the
-  // layer already holds, so it needs no refresh() — that call re-fetched and
-  // re-parsed the whole 2.3 MB source on every click, which is what stood
-  // between the click and the camera moving.
-  boundaryLayer.definitionExpression = `id='${regionId}'`;
+  // The whole set stays drawn; setActiveRegion above has already told the
+  // renderer which one to emphasize. Filtering to the picked region is what used
+  // to leave no way to switch without going Home first.
 
   // One query for the geometry, which the analysis needs anyway; its extent is
   // the same extent queryExtent() used to make a second round trip for.
@@ -2529,14 +2576,20 @@ const bootMapUi = async () => {
     if (!layers.length) return;
     const {results} = await arcgisMap.view.hitTest(event, {include: layers});
 
+    // The whole set stays drawn while one region is analyzed, so a click inside
+    // the analyzed region lands on its own outline. Re-running it would throw
+    // away the analysis and rebuild the identical one.
     const uploaded = results.find((r) => r.graphic?.layer === uploadedLayer);
     if (uploaded) {
-      const row = userRows.find((r) => r.id === uploaded.graphic.attributes?.regionId);
+      const id = uploaded.graphic.attributes?.regionId;
+      if (String(id) === activeRegionId) return;
+      const row = userRows.find((r) => r.id === id);
       if (row) analyzeUserRegion(row);
       return;
     }
     const hit = results.find((r) => r.graphic?.attributes?.id != null);
-    if (hit) analyzeGlobalRegion({regionId: hit.graphic.attributes.id, name: hit.graphic.attributes.n});
+    if (!hit || String(hit.graphic.attributes.id) === activeRegionId) return;
+    analyzeGlobalRegion({regionId: hit.graphic.attributes.id, name: hit.graphic.attributes.n});
   });
 
   // "Home" is the same thing the Regions button does: drop the analysis and go
