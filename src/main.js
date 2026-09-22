@@ -756,6 +756,14 @@ const ensureRegionRings = () => {
     q.outFields = ["id", "n"];
     q.returnGeometry = true;
     const {features} = await boundaryLayer.queryFeatures(q);
+    // A null id means the layer typed the field from features that disagreed —
+    // a set mixing 1 with "whymap-3" types it numeric and nulls every string.
+    // Those regions would silently vanish from the classification, so say so.
+    const nulls = features.filter((f) => f.attributes.id == null).length;
+    if (nulls) {
+      console.error(`${nulls} of ${features.length} regions in "${activeRegionSet.label}" have no id; ` +
+        "their ids are probably not all the same type in the GeoJSON. They cannot be classified or selected.");
+    }
     return features.map((f) => ({
       id: f.attributes.id,
       name: f.attributes.n,

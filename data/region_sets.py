@@ -275,8 +275,12 @@ def build(set_id, shp_path, out_dir, tolerance, min_area=MIN_AREA):
             stats["unnamed"] += 1
             name = f"Unnamed ({props.get(spec['id_field'])})"
 
-        # The id has to be unique within the set: the app keys selection, trend
-        # classification and the definitionExpression off it.
+        # The id has to be unique within the set, and a string in every feature:
+        # the app keys selection, trend classification and the layer's
+        # definitionExpression off it, and a GeoJSONLayer infers one type for the
+        # field from the features it reads first. A file mixing 1 with "whymap-3"
+        # types the field numeric and hands back null for every string id, which
+        # silently drops those regions from the classification and from clicking.
         rid = str(props.get(spec["id_field"]) or "").strip() or f"f{len(features)}"
         if rid in seen_ids:
             rid = f"{rid}-{len(features)}"
