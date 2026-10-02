@@ -1030,19 +1030,37 @@ const setTrendsOff = () => {
 // Trends belong to the view that produced them. Entering the global view drops
 // a region classification and leaving it drops the trend raster, so the button
 // never offers to hide something that is no longer on screen.
+/**
+ * Trends stay on across a view change; only the picture has to be rebuilt.
+ *
+ * The two modes draw different things — classified outlines, or a per-cell
+ * raster — so what is on screen is stale the moment the view changes. This drops
+ * the stale picture and leaves `on` set; ensureTrendsForView, called once the new
+ * view has settled, builds the other one. Turning trends off used to be the
+ * answer and meant switching to the global map silently cancelled a
+ * classification the user had asked for.
+ */
 const clearTrendsOnViewChange = (entering) => {
   if (!trendState.on || trendState.mode === entering) return;
-  if (trendState.mode === "region") {
-    setTrendsOff(); // restores the outline symbol
-  } else {
-    // The global raster is being torn down by the caller; only the flags remain.
-    trendState.on = false;
-    trendState.mode = null;
-    trendState.varName = null;
-    trendsButton.setAttribute("aria-pressed", "false");
-    trendsLabel.textContent = "Analyze trends";
-    trendWindowField.classList.add("hidden");
-  }
+  trendState.mode = null;
+  trendState.varName = null;
+  trendState.byRegion.clear();
+  // The outlines go back to plain; the global raster is torn down by the caller.
+  applyRegionRenderer();
+  paintUploadedSymbols();
+};
+
+/**
+ * Build whichever trend picture the current view needs, if trends are on and it
+ * is not already showing. Called at the end of each view's setup, so a switch
+ * carries the classification over instead of cancelling it.
+ */
+const ensureTrendsForView = () => {
+  if (!trendState.on || trendState.running) return;
+  const wanted = globalView.active ? "global" : "region";
+  if (trendState.mode === wanted) return;
+  if (wanted === "global") runGlobalTrends();
+  else runTrends();
 };
 
 // The whole-world trend map: one slope per cell, drawn through the same raster
@@ -1931,6 +1949,7 @@ const analyzeGlobalView = async ({keepView = false} = {}) => {
   await zoomPromise;
   // Leave the animation paused on the first frame; the user starts it with the
   // time slider's play button when ready.
+  ensureTrendsForView();
 };
 
 const exitGlobalView = () => {
@@ -2439,6 +2458,9 @@ const main = async ({polygon, zoomTarget}) => {
   await zoomPromise;
   if (runId !== analysisRunSeq) return; // a newer analysis or reset took over
   await renderVariable({keepSlider: false});
+  // Analyzing a region from the global map lands here, so the classification is
+  // rebuilt for the view it arrived in.
+  ensureTrendsForView();
 }
 
 /**
@@ -2472,6 +2494,7 @@ const resetLayers = () => {
   // The same fit the set picker uses: boundaryLayer.fullExtent is the whole
   // world for a fileless set, which sent Home past the globe.
   fitRegionSet();
+  ensureTrendsForView(); // coming back from the global map rebuilds the classification
 }
 
 // Build a custom set of zoom levels (LODs) at half-step increments. The default
@@ -2686,10 +2709,15 @@ const bootMapUi = async () => {
       // In the global view the trend map replaced the animation, so turning it
       // off means putting the animation back rather than restoring a symbol.
       if (globalView.active) {
+        // Cleared before the redraw, so ensureTrendsForView at the end of
+        // analyzeGlobalView sees trends as off and leaves them off.
         trendState.on = false;
+        trendState.mode = null;
         trendState.varName = null;
         trendsButton.setAttribute("aria-pressed", "false");
         trendsLabel.textContent = "Analyze trends";
+        trendWindowField.classList.add("hidden");
+        trendLegendDiv.classList.add("hidden");
         analyzeGlobalView({keepView: true});
       } else {
         setTrendsOff();
