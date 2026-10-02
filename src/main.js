@@ -840,6 +840,8 @@ const trendWindowOptions = () => {
 // time axis is known. Held as a hook because the dropdown lives with the other
 // UI wiring and the fits below are module scope.
 let onTrendWindowsReady = () => {};
+// Likewise: the boot path starts trends through the same route the button uses.
+let startTrends = () => {};
 
 // First month index inside the trend window, and how it is described. Measured
 // back from the newest month with data rather than from today, so the label
@@ -2674,6 +2676,10 @@ const bootMapUi = async () => {
   // Both fits call this once the time axis has resolved.
   onTrendWindowsReady = fillTrendWindows;
 
+  // Whichever fit suits the active view. Shared by the button and by the boot
+  // path, so starting trends means the same thing either way.
+  startTrends = () => (globalView.active ? runGlobalTrends() : runTrends());
+
   trendsButton.addEventListener("click", () => {
     if (trendState.running) return;
     if (trendState.on) {
@@ -2690,8 +2696,7 @@ const bootMapUi = async () => {
       }
       return;
     }
-    if (globalView.active) runGlobalTrends();
-    else runTrends();
+    startTrends();
   });
 
   regionFilter.addEventListener("input", applyRegionFilter);
@@ -2764,6 +2769,12 @@ const bootMapUi = async () => {
       regionSets = [MY_REGIONS];
       regionSetSelect.replaceChildren(new Option(MY_REGIONS.label, MY_REGIONS.id));
       await setRegionSet(MY_REGIONS);
+    })
+    // After the catch, not before it: a set that failed to load still has the
+    // uploads to classify, and a failure in the classification must not look
+    // like a failure to load the sets.
+    .then(() => {
+      if (displayConfig.trendsOnLoad) startTrends();
     });
 
   regionSetSelect.addEventListener("change", (e) => {

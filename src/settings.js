@@ -179,6 +179,12 @@ export const DISPLAY_DEFAULTS = {
   // continuous and easier to read as a trend; off, it breaks at every gap and
   // the record's coverage is visible instead.
   fillGaps: envBool(import.meta.env.VITE_SETTINGS_FILL_GAPS, true),
+  // Whether the trend classification is already running when the app opens.
+  // On, because the first question of a map of aquifers is usually which of them
+  // are in trouble, and the classification answers it without a click. It costs
+  // the whole-world frames for the displayed variable, which the app prefetches
+  // at startup anyway (VITE_PREFETCH_VARIABLES).
+  trendsOnLoad: envBool(import.meta.env.VITE_SETTINGS_TRENDS_ON_LOAD, true),
   // Region names drawn on the outlines in the regional view.
   showRegionNames: envBool(import.meta.env.VITE_SETTINGS_SHOW_REGION_NAMES, true),
   // Labels stay off until the view is zoomed in past this scale. Collision
