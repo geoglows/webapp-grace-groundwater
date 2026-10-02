@@ -660,7 +660,11 @@ const setRegionSet = async (set, {select = true} = {}) => {
     clearTimeseriesPanel(appInstructions);
   }
   activeRegionSet = set;
-  if (trendState.on) setTrendsOff();
+  // A classification belongs to the regions it was computed for, and these are
+  // different regions — ids do not even mean the same thing across sets. Trends
+  // stay on and the new set is classified below, rather than the switch
+  // cancelling something the user asked for.
+  if (trendState.on) invalidateTrendPicture();
   regionRingsPromise = null;
   setActiveRegion(null);
   setBreadcrumb(null);
@@ -689,6 +693,7 @@ const setRegionSet = async (set, {select = true} = {}) => {
     await loadUserRegions();
     if (!firstRegionSet && select) fitOrSelectRegionSet();
     firstRegionSet = false;
+    ensureTrendsForView(); // My Regions classifies its uploads the same way
     return;
   }
   await boundaryLayer.load();
@@ -698,6 +703,7 @@ const setRegionSet = async (set, {select = true} = {}) => {
   // at the camera .env configured, and refitting here would override it.
   if (!firstRegionSet && select) fitOrSelectRegionSet();
   firstRegionSet = false;
+  ensureTrendsForView(); // classify the set just loaded, if trends are on
 };
 
 // The initial set is applied during boot, where the camera belongs to whichever
@@ -1040,14 +1046,21 @@ const setTrendsOff = () => {
  * answer and meant switching to the global map silently cancelled a
  * classification the user had asked for.
  */
-const clearTrendsOnViewChange = (entering) => {
-  if (!trendState.on || trendState.mode === entering) return;
+// Drop the classification currently drawn, keeping trends on. Whatever changed
+// — the view, or which regions are on the map — made it stale, and
+// ensureTrendsForView builds the replacement once the new state has settled.
+const invalidateTrendPicture = () => {
   trendState.mode = null;
   trendState.varName = null;
   trendState.byRegion.clear();
   // The outlines go back to plain; the global raster is torn down by the caller.
   applyRegionRenderer();
   paintUploadedSymbols();
+};
+
+const clearTrendsOnViewChange = (entering) => {
+  if (!trendState.on || trendState.mode === entering) return;
+  invalidateTrendPicture();
 };
 
 /**
