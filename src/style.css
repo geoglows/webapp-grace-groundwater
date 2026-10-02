@@ -21,9 +21,6 @@
     flex: 0 0 var(--chart-panel-size, 32%);
     min-height: 0;
     overflow: hidden;
-    /* color-scheme so the panel's own scrollbars and selection follow it dark,
-       the same reason .rfs-panel declares it. */
-    color-scheme: dark;
     font-family: "Open Sans", "Segoe UI", system-ui, sans-serif;
     background: var(--surface);
     color: var(--text);
@@ -143,7 +140,18 @@ body.panel-resizing * {
     src: url("/fonts/opensans.woff2") format("woff2");
 }
 
+/* Dark is the default, so a page with no data-theme set looks the way the app
+   shipped. The light set below overrides the colours and nothing else — radii
+   are not a theme — and because every surface in the app, including the map
+   overlays in the shadow DOM, is painted from these tokens, swapping them is
+   the whole of a theme change.
+
+   color-scheme lives here rather than on each panel now that the whole app is
+   themed together: it tells the browser how to draw its own parts — scrollbars,
+   carets, selection, a select's popup — and those should follow the app. */
 :root {
+    color-scheme: dark;
+
     --bg: #0a0e17;
     --surface: #111827;
     --surface2: #1e293b;
@@ -153,9 +161,6 @@ body.panel-resizing * {
     --text-faint: #b6c2d3;
     --accent: #38bdf8;
     --on-accent: #04121b;
-    --r-sm: 4px;
-    --r-md: 6px;
-    --r-lg: 8px;
 
     /* Chart chrome. Kept separate from the surface tokens because a chart's
        grid has to sit further back than any border does — it is a reading aid
@@ -163,17 +168,47 @@ body.panel-resizing * {
     --chart-grid: rgba(148, 163, 184, 0.14);
     --chart-axis: #64748b;
     --chart-text: #b6c2d3;
+
+    /* Uploaded regions, in the list and on the map. Green against everything
+       else the map draws; a token because the shade that reads on near-black is
+       washed out on white. */
+    --user-region: #4ade80;
+    --user-region-strong: #86efac;
+
+    --r-sm: 4px;
+    --r-md: 6px;
+    --r-lg: 8px;
 }
 
-/* color-scheme is what tells the browser to draw its own parts of a control
-   dark — the select's popup, the caret, selection, scrollbars. Declared here
-   rather than on :root because the rest of the app is still light and would
-   get dark native controls on white cards. */
+/* The same roles on a pale ground. --bg is the recessed one in both themes: it
+   is what a control sits in, so it goes darker than --surface in dark and
+   lighter in light. --accent deepens, because the cyan that reads on near-black
+   is too pale to put white text on. */
+:root[data-theme="light"] {
+    color-scheme: light;
+
+    --bg: #eef2f7;
+    --surface: #ffffff;
+    --surface2: #f1f5f9;
+    --border: #cbd5e1;
+    --text: #0f172a;
+    --text-dim: #334155;
+    --text-faint: #64748b;
+    --accent: #0369a1;
+    --on-accent: #ffffff;
+
+    --chart-grid: rgba(71, 85, 105, 0.16);
+    --chart-axis: #475569;
+    --chart-text: #475569;
+
+    --user-region: #15803d;
+    --user-region-strong: #166534;
+}
+
 .rfs-panel {
     /* The region list owns its own scrolling; this is the fallback for a window
        too short to show the controls above it. */
     overflow-y: auto;
-    color-scheme: dark;
     font-family: "Open Sans", "Segoe UI", system-ui, sans-serif;
     background: var(--surface);
     color: var(--text);
@@ -428,7 +463,6 @@ body.panel-resizing * {
     border: 1px solid var(--border);
     border-radius: var(--r-lg);
     box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
-    color-scheme: dark;
 }
 
 .rfs-timebar-play {
@@ -576,7 +610,6 @@ body.panel-resizing * {
    overlays they can use these rules directly. The Tailwind utilities left on
    them are layout only; every color comes from here. */
 .rfs-modal {
-    color-scheme: dark;
     font-family: "Open Sans", "Segoe UI", system-ui, sans-serif;
     background: var(--surface);
     color: var(--text);
@@ -688,16 +721,16 @@ body.panel-resizing * {
    outlines are blue or amber, the mascons fuchsia, a sketch cyan. Panel and map
    use the same hue so a row and its outline read as the same thing. */
 .rfs-list-item[data-user="true"] {
-    color: #4ade80;
+    color: var(--user-region);
 }
 
 .rfs-list-item[data-user="true"]:hover {
-    color: #86efac;
+    color: var(--user-region-strong);
 }
 
 .rfs-list-item[data-user="true"][aria-current="true"] {
-    border-left-color: #4ade80;
-    color: #86efac;
+    border-left-color: var(--user-region);
+    color: var(--user-region-strong);
 }
 
 /* The row is a button, so the remove control is a sibling rather than nested. */

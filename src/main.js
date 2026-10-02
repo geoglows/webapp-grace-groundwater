@@ -45,11 +45,16 @@ import {
   UNITS,
   VALUE_LABEL,
   VARIABLES,
+  variableColor,
 } from "./settings.js";
 import {initPanelSplitter} from "./splitPanels.js";
 import {renderTimeseriesChart, seriesToCsv} from "./timeseriesChart.js";
 import {pruneStaleCache} from "./db.js";
+import {initTheme, isLight, onThemeChange, setTheme, theme} from "./theme.js";
 import {openZarrArray} from "./zarrStore.js";
+
+// Before any painting, so the first frame is already in the right theme.
+initTheme();
 
 hydrateIcons();  // heroicons
 
@@ -246,6 +251,7 @@ const regionFilter = document.getElementById("region-filter");
 const breadcrumb = document.getElementById("breadcrumb");
 const crumbHome = document.getElementById("crumb-home");
 const regionNamesToggle = document.getElementById("region-names-toggle");
+const lightModeToggle = document.getElementById("light-mode-toggle");
 const masconToggle = document.getElementById("mascon-toggle");
 const masconWidthSlider = document.getElementById("mascon-width");
 const masconWidthValue = document.getElementById("mascon-width-value");
@@ -282,7 +288,7 @@ const syncSettingsControls = () => {
   palettePreview.style.background = paletteCssGradient(displayConfig.colorPalette);
 
   seriesToggles.replaceChildren(
-    ...Object.entries(VARIABLES).map(([key, {color}]) => {
+    ...Object.entries(VARIABLES).map(([key]) => {
       const row = document.createElement("label");
       row.className = "rfs-check";
 
@@ -293,7 +299,7 @@ const syncSettingsControls = () => {
 
       const swatch = document.createElement("span");
       swatch.className = "rfs-check-swatch";
-      swatch.style.background = color;
+      swatch.style.background = variableColor(key, isLight());
 
       const name = document.createElement("span");
       name.textContent = key;
@@ -312,6 +318,7 @@ const syncSettingsControls = () => {
   regionNamesToggle.checked = displayConfig.showRegionNames;
   masconToggle.checked = displayConfig.showMascons;
   fillGapsToggle.checked = displayConfig.fillGaps;
+  lightModeToggle.checked = isLight();
   masconWidthSlider.value = String(displayConfig.masconWidth);
   masconWidthValue.textContent = `${displayConfig.masconWidth}px`;
   dynamicScaleToggle.checked = displayConfig.dynamicColorScale;
@@ -1271,7 +1278,8 @@ const plotPickedCell = async (lon, lat) => {
       if (!data) continue;
       const values = cellSeries(data, iy, ix);
       if (!values.some(Number.isFinite)) continue; // ocean, or no data in this cell
-      const {longName, color} = VARIABLES[varName];
+      const {longName} = VARIABLES[varName];
+      const color = variableColor(varName, isLight());
       // Only the lone series can show a band, so only then is it worth reading.
       const uncertainty = wanted.length === 1 ? await cellUncertainty(varName, iy, ix) : null;
       if (runId !== analysisRunSeq) return;
@@ -2231,7 +2239,8 @@ const main = async ({polygon, zoomTarget}) => {
   };
 
   const seriesFor = (varName) => {
-    const {longName, color} = VARIABLES[varName];
+    const {longName} = VARIABLES[varName];
+    const color = variableColor(varName, isLight());
     const d = varData[varName];
     const entry = {
       name: varName,
@@ -2746,6 +2755,19 @@ const bootMapUi = async () => {
   // chart rather than of the whole analysis. With no analysis showing there is
   // nothing to redraw and the choice is simply remembered for the next one.
   syncSeriesToggles();
+  // The stylesheet carries the theme on its own. This repaints the few things it
+  // cannot reach: colours read into a chart at render time, and the swatches
+  // built from them.
+  lightModeToggle.addEventListener("change", (e) => setTheme(e.target.checked ? "light" : "dark"));
+  onThemeChange(() => {
+    // syncSettingsControls rebuilds the series rows, which come back unchecked,
+    // so syncSeriesToggles has to put their state back.
+    syncSettingsControls();
+    syncSeriesToggles();
+    updateMapLegend();
+    regionalSeriesHandler?.(); // the chart read its colours at render time
+  });
+
   // Gaps are a chart concern only: the raster and the color bar say nothing
   // about the months GRACE is missing.
   fillGapsToggle.addEventListener("change", (e) => {

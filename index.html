@@ -14,8 +14,9 @@
   <script type="module" src="/src/main.js" defer></script>
 </head>
 <body class="flex h-full overflow-hidden bg-[var(--bg)] font-sans">
-<!-- data-theme is what @geoglows/geoglows-auth keys its dark styling off, so the
-     account menu opens in the panel's colors rather than white. -->
+<!-- data-theme is what @geoglows/geoglows-auth keys its styling off, so the
+     account menu opens in the panel's colors. Kept in step with the app's theme
+     by theme.js rather than pinned to dark. -->
 <aside class="rfs-panel flex w-80 shrink-0 flex-col" data-theme="dark">
   <header class="rfs-head">
     <div class="rfs-brand">
@@ -80,6 +81,11 @@
     <label class="rfs-check">
       <input type="checkbox" id="region-names-toggle">
       <span>Show region names</span>
+    </label>
+
+    <label class="rfs-check rfs-check-wide">
+      <input type="checkbox" id="light-mode-toggle">
+      <span>Light mode</span>
     </label>
 
   </div>

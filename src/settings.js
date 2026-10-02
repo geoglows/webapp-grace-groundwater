@@ -62,13 +62,21 @@ const envList = (value, allowed, fallback) => {
 // builds these by downscaling VIC and CLSM instead, which manufactures detail
 // those models never had, so they are never read from it. GWSa is
 // TWSa - SWEa - CANa - SMa and can be no finer than its components.
+// `color` carries one hue per theme because a line has to be legible against the
+// ground it is drawn on, and one value cannot do both: SWEa's near-white
+// disappears on a pale chart, and the deep tones that work there go muddy on
+// near-black. The five stay in the same order and far enough apart in both.
 export const VARIABLES = {
-  GWSa: {longName: "Groundwater Storage Anomaly", color: "#60a5fa", resolution: "1.0"},
-  TWSa: {longName: "Total Water Storage Anomaly", color: "#fb923c", resolution: "0.5"},
-  SMa: {longName: "Soil Moisture Anomaly", color: "#34d399", resolution: "1.0"},
-  SWEa: {longName: "Snow Water Equivalent Anomaly", color: "#e2e8f0", resolution: "1.0"},
-  CANa: {longName: "Canopy Water Storage Anomaly", color: "#c084fc", resolution: "1.0"},
+  GWSa: {longName: "Groundwater Storage Anomaly", color: {dark: "#60a5fa", light: "#2563eb"}, resolution: "1.0"},
+  TWSa: {longName: "Total Water Storage Anomaly", color: {dark: "#fb923c", light: "#ea580c"}, resolution: "0.5"},
+  SMa: {longName: "Soil Moisture Anomaly", color: {dark: "#34d399", light: "#059669"}, resolution: "1.0"},
+  SWEa: {longName: "Snow Water Equivalent Anomaly", color: {dark: "#e2e8f0", light: "#475569"}, resolution: "1.0"},
+  CANa: {longName: "Canopy Water Storage Anomaly", color: {dark: "#c084fc", light: "#7c3aed"}, resolution: "1.0"},
 };
+
+/** That variable's line colour for the theme now showing. */
+export const variableColor = (varName, light) =>
+  VARIABLES[varName].color[light ? "light" : "dark"];
 const VARIABLE_KEYS = Object.keys(VARIABLES);
 
 // ---- color palettes --------------------------------------------------------
