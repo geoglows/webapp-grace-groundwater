@@ -339,11 +339,15 @@ const allowedRange = (state, rows, k, kind) => {
   return [prevPeak, peak - 1];
 };
 
-// One water year, zoomed in, where the trough and peak are moved by clicking.
+// One water year, zoomed in. Clicking a month on the curve offers to make it
+// the trough or the peak; the chart draws how S_B, S_P and S_L, and so R1 and
+// R2, come out of the picks.
 const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
   const {dates, months, values, fill, areaKm2} = state;
   const row = rows[k];
   const x = (i) => dates[i].getTime();
+  const when = (i) => dates[i].toLocaleDateString("en-US", {month: "short", year: "numeric"});
+  const DAY = 864e5;
   const node = el("div", "rc-editor");
 
   // Header: previous / this year / next.
@@ -361,40 +365,32 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
   const last = Math.min(row.yearFirst + 11, dates.length - 1);
   const title = el("div", "rc-editor-title");
   title.append(el("span", "rc-editor-year", `Water year ${row.waterYear}`),
-    el("span", "rc-editor-range", `${monthLabel(months[row.yearFirst])} to ${monthLabel(months[last])} · ${k + 1} of ${rows.length}`));
+    el("span", "rc-editor-range", `${when(row.yearFirst)} to ${when(last)} · year ${k + 1} of ${rows.length}`));
   nav.append(prev, title, next);
-
-  const mode = el("div", "rc-segmented");
-  mode.setAttribute("role", "radiogroup");
-  mode.setAttribute("aria-label", "Pick to move");
-  for (const kind of ["trough", "peak"]) {
-    const b = el("button", `rc-seg${state.editMode === kind ? " rc-seg-on" : ""}`, kind === "trough" ? "▼ Move trough" : "▲ Move peak");
-    b.type = "button";
-    b.setAttribute("aria-pressed", String(state.editMode === kind));
-    b.addEventListener("click", () => {
-      state.editMode = kind;
-      onSelect(row.waterYear);
-    });
-    mode.append(b);
-  }
-  nav.append(mode);
+  const reset = el("button", "rc-button", "Reset this year");
+  reset.type = "button";
+  reset.disabled = !row.overridden.length;
+  reset.title = row.overridden.length ? "Go back to the automatic trough and peak" : "This year uses the automatic picks";
+  reset.addEventListener("click", () => onReset(row.waterYear));
+  reset.style.marginLeft = "auto";
+  nav.append(reset);
   node.append(nav);
+  node.append(el("p", "rc-text rc-editor-help",
+    "To change a pick, click a month on the curve and choose whether it is this year's trough or peak. Use ◀ ▶ or the arrow keys to move between years."));
 
-  // Zoomed chart: from a little before the recession starts to a little after
-  // the water year ends.
-  const [lo, hi] = allowedRange(state, rows, k, state.editMode);
-  const start = Math.max(state.first, Math.min(row.error ? row.yearFirst : row.recession.from, lo, row.yearFirst) - 2);
+  const [pLo, pHi] = allowedRange(state, rows, k, "peak");
+  const [tLo, tHi] = allowedRange(state, rows, k, "trough");
+  const start = Math.max(state.first, Math.min(row.error ? row.yearFirst : row.recession.from, tLo, row.yearFirst) - 1);
   const end = Math.min(dates.length - 1, row.yearFirst + 13);
+
   const obs = [];
   const est = [];
   for (let i = start; i <= end; i++) {
     if (!Number.isFinite(fill.filled[i])) continue;
-    obs.push({x: x(i), y: Number.isFinite(values[i]) ? values[i] : null});
+    obs.push({x: x(i), y: Number.isFinite(values[i]) ? values[i] : null, i});
     const edge = fill.isFilled[i] || fill.isFilled[i - 1] || fill.isFilled[i + 1];
-    est.push({x: x(i), y: edge ? fill.filled[i] : null, f: fill.isFilled[i] === 1});
+    est.push({x: x(i), y: edge ? fill.filled[i] : null, i, f: fill.isFilled[i] === 1});
   }
-  const allowed = [];
-  for (let i = lo; i <= hi; i++) allowed.push({x: x(i), y: fill.filled[i], i});
 
   const grid = el("div", "rc-editor-grid");
   const chartBox = el("div", "rc-canvas rc-canvas-editor");
@@ -403,53 +399,142 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
   const side = el("div", "rc-editor-side");
   grid.append(chartBox, side);
   node.append(grid);
-  node.append(el("p", "rc-stat-note",
-    `Click a circled month to move the ${state.editMode} there. Months in red are filled by the seasonal model rather than observed.`));
 
   const c = axisColors();
   const datasets = [
-    {label: "Allowed", data: allowed, showLine: false, pointRadius: 7, pointHoverRadius: 9, pointHitRadius: 10,
-      pointBackgroundColor: "transparent", pointBorderColor: state.editMode === "peak" ? COLOR.peak : COLOR.trough,
-      pointBorderWidth: 1.5, order: 4},
-    {label: "GWSa", data: obs, borderColor: COLOR.series, borderWidth: 2, pointRadius: 2.5, pointBackgroundColor: COLOR.series, spanGaps: false, order: 3},
-    {label: "Filled", data: est, borderColor: COLOR.filled, borderWidth: 2, pointRadius: (ctx) => (ctx.raw?.f ? 2.5 : 0),
-      pointBackgroundColor: COLOR.filled, spanGaps: false, order: 2},
+    {label: "GWSa", data: obs, borderColor: COLOR.series, borderWidth: 2, pointRadius: 3, pointHoverRadius: 6,
+      pointBackgroundColor: COLOR.series, spanGaps: false, order: 3},
+    {label: "Filled", data: est, borderColor: COLOR.filled, borderWidth: 2, pointRadius: (ctx) => (ctx.raw?.f ? 3 : 0),
+      pointHoverRadius: (ctx) => (ctx.raw?.f ? 6 : 0), pointBackgroundColor: COLOR.filled, spanGaps: false, order: 2},
   ];
+  // Where the R1 and R2 bars stand: just right of the peak, with dotted guides
+  // running across to them from the levels they measure between.
+  const barX1 = row.error ? 0 : x(row.peak) + 25 * DAY;
+  const barX2 = row.error ? 0 : x(row.peak) + 55 * DAY;
   if (!row.error) {
-    const peakX = x(row.peak);
-    const dx = 8 * 864e5;
+    const {from, to, y0, y1} = row.recession;
+    const slope = to > from ? (y1 - y0) / (to - from) : 0;
+    const declining = from < row.trough;
+    if (declining) {
+      // The part the line was fitted on, solid; its extension to the peak, dashed.
+      datasets.push(
+        {label: "Recession line (fitted)", data: [{x: x(from), y: y0}, {x: x(row.trough), y: y0 + slope * (row.trough - from)}],
+          borderColor: COLOR.recession, borderWidth: 3, pointRadius: 0, order: 1},
+        {label: "Recession line (extended)", data: [{x: x(row.trough), y: y0 + slope * (row.trough - from)}, {x: x(to), y: y1}],
+          borderColor: COLOR.recession, borderWidth: 2, borderDash: [6, 4], pointRadius: 0, order: 1},
+      );
+    }
+    const guide = (y, x0, color) => ({data: [{x: x0, y}, {x: barX2 + 10 * DAY, y}], borderColor: color, borderWidth: 1,
+      borderDash: [2, 3], pointRadius: 0, order: 1, label: "guide"});
     datasets.push(
-      {label: "Recession line", data: [{x: x(row.recession.from), y: row.recession.y0}, {x: x(row.recession.to), y: row.recession.y1}],
-        borderColor: COLOR.recession, borderWidth: 1.6, borderDash: [5, 3], pointRadius: 0, order: 1},
-      {label: "R1", data: [{x: peakX + dx, y: row.sB}, {x: peakX + dx, y: row.sP}], borderColor: COLOR.r1, borderWidth: 4, pointRadius: 0, order: 1},
-      {label: "R2", data: [{x: peakX + 3 * dx, y: row.sL}, {x: peakX + 3 * dx, y: row.sP}], borderColor: COLOR.r2, borderWidth: 4, pointRadius: 0, order: 1},
-      {label: "Trough", data: [{x: x(row.trough), y: row.sB}], showLine: false, pointStyle: "triangle", rotation: 180, pointRadius: 9,
-        pointBackgroundColor: COLOR.trough, pointBorderColor: COLOR.trough, order: 0},
-      {label: "Peak", data: [{x: peakX, y: row.sP}], showLine: false, pointStyle: "triangle", pointRadius: 9,
-        pointBackgroundColor: COLOR.peak, pointBorderColor: COLOR.peak, order: 0},
+      guide(row.sB, x(row.trough), COLOR.trough),
+      guide(row.sP, x(row.peak), COLOR.peak),
+      guide(row.sL, x(row.peak), COLOR.recession),
+      {label: "R1", data: [{x: barX1, y: row.sB}, {x: barX1, y: row.sP}], borderColor: COLOR.r1, borderWidth: 6, pointRadius: 0, order: 0},
+      {label: "R2", data: [{x: barX2, y: row.sL}, {x: barX2, y: row.sP}], borderColor: COLOR.r2, borderWidth: 6, pointRadius: 0, order: 0},
+      {label: "Trough", data: [{x: x(row.trough), y: row.sB}], showLine: false, pointStyle: "triangle", rotation: 180, pointRadius: 10,
+        pointBackgroundColor: COLOR.trough, pointBorderColor: "#fff", pointBorderWidth: 1, order: 0},
+      {label: "Peak", data: [{x: x(row.peak), y: row.sP}], showLine: false, pointStyle: "triangle", pointRadius: 10,
+        pointBackgroundColor: COLOR.peak, pointBorderColor: "#fff", pointBorderWidth: 1, order: 0},
     );
   }
-  const chart = new Chart(canvas, {
+
+  // Text on the canvas: what each marker and bar is.
+  const labels = {
+    id: "editorLabels",
+    afterDatasetsDraw(chart) {
+      if (row.error) return;
+      const {ctx, scales: {x: sx, y: sy}} = chart;
+      ctx.save();
+      ctx.font = "600 12px 'Open Sans', system-ui, sans-serif";
+      ctx.textBaseline = "middle";
+      const put = (text, px, py, color, align = "left") => {
+        ctx.fillStyle = color;
+        ctx.textAlign = align;
+        ctx.fillText(text, px, py);
+      };
+      put(`R1 = ${fmt(row.r1, 1)} cm`, sx.getPixelForValue(barX1) - 8, sy.getPixelForValue((row.sB + row.sP) / 2), COLOR.r1, "right");
+      put(`R2 = ${fmt(row.r2, 1)} cm`, sx.getPixelForValue(barX2) + 8, sy.getPixelForValue((row.sL + row.sP) / 2), COLOR.r2);
+      put("S_P", sx.getPixelForValue(barX2) + 14, sy.getPixelForValue(row.sP), COLOR.peak);
+      put("S_B", sx.getPixelForValue(barX2) + 14, sy.getPixelForValue(row.sB), COLOR.trough);
+      if (row.sL < row.sB - 0.05) put("S_L", sx.getPixelForValue(barX2) + 14, sy.getPixelForValue(row.sL), COLOR.recession);
+      ctx.restore();
+    },
+  };
+
+  // The menu a click on a month opens.
+  const menu = el("div", "rc-pop hidden");
+  chartBox.append(menu);
+  let chart = null;
+  // The hover tooltip would sit on top of the menu, so it is off while the menu is open.
+  const setTooltip = (on) => {
+    if (!chart) return;
+    chart.options.plugins.tooltip.enabled = on;
+    if (!on) chart.tooltip.setActiveElements([], {x: 0, y: 0});
+    chart.update("none");
+  };
+  const closeMenu = () => {
+    menu.classList.add("hidden");
+    setTooltip(true);
+  };
+  const openMenu = (i, px, py) => {
+    menu.replaceChildren();
+    menu.append(el("p", "rc-pop-title", `${when(i)} · ${fmt(fill.filled[i])} cm${fill.isFilled[i] ? " (filled month)" : ""}`));
+    const option = (kind, lo, hi, why) => {
+      const b = el("button", "rc-pop-btn", kind === "trough" ? "▼ Make this the trough" : "▲ Make this the peak");
+      b.type = "button";
+      const current = !row.error && row[kind] === i;
+      const allowed = i >= lo && i <= hi && !current;
+      b.disabled = !allowed;
+      if (current) b.title = `This is already the ${kind}`;
+      else if (!allowed) b.title = why;
+      b.addEventListener("click", () => {
+        closeMenu();
+        onPick(row.waterYear, kind, months[i]);
+      });
+      menu.append(b);
+      if (!allowed && !current) menu.append(el("p", "rc-pop-why", why));
+    };
+    option("trough", tLo, tHi, `The trough must fall between the previous peak (${when(tLo)}) and this year's peak.`);
+    option("peak", pLo, pHi, `The peak must fall within this water year (${when(pLo)} to ${when(pHi)}).`);
+    const cancel = el("button", "rc-pop-cancel", "Cancel");
+    cancel.type = "button";
+    cancel.addEventListener("click", closeMenu);
+    menu.append(cancel);
+    menu.classList.remove("hidden");
+    setTooltip(false);
+    const w = chartBox.clientWidth;
+    menu.style.left = `${Math.min(Math.max(px + 10, 0), w - 250)}px`;
+    menu.style.top = `${Math.max(py - 20, 0)}px`;
+  };
+
+  chart = new Chart(canvas, {
     type: "line",
+    plugins: [labels],
     data: {datasets},
     options: {
       responsive: true,
       maintainAspectRatio: false,
       animation: false,
       parsing: false,
-      interaction: {mode: "nearest", intersect: true},
+      layout: {padding: {right: 60}},
+      interaction: {mode: "nearest", intersect: false, axis: "x"},
       onClick: (event, _, ch) => {
-        // The allowed month nearest the click, whether or not a circle was hit.
+        // The month nearest the click on the curve.
         const t = ch.scales.x.getValueForPixel(event.x);
         let best = null;
-        for (const p of allowed) if (!best || Math.abs(p.x - t) < Math.abs(best.x - t)) best = p;
-        if (best && Math.abs(best.x - t) < 20 * 864e5) onPick(row.waterYear, state.editMode, months[best.i]);
+        for (const p of est) if (p.y != null || Number.isFinite(values[p.i])) {
+          if (!best || Math.abs(p.x - t) < Math.abs(best.x - t)) best = p;
+        }
+        for (const p of obs) if (p.y != null && (!best || Math.abs(p.x - t) < Math.abs(best.x - t))) best = p;
+        if (best && Math.abs(best.x - t) < 20 * DAY && best.i >= start) openMenu(best.i, event.x, event.y);
       },
       onHover: (event, _, ch) => {
         ch.canvas.style.cursor = "pointer";
       },
       scales: {
-        x: {type: "time", time: {unit: "month", tooltipFormat: "MMM yyyy", displayFormats: {month: "MMM yy"}},
+        x: {type: "time", min: x(start) - 15 * DAY, max: barX2 ? Math.max(x(end), barX2 + 20 * DAY) : x(end),
+          time: {unit: "month", tooltipFormat: "MMM yyyy", displayFormats: {month: "MMM yy"}},
           ticks: {color: c.text, maxRotation: 0, autoSkip: true}, grid: {color: c.grid}},
         y: {title: {display: true, text: "GWSa (cm)", color: c.text}, ticks: {color: c.text},
           grid: {color: (ctx) => (ctx.tick?.value === 0 ? c.axis : c.grid)}},
@@ -457,21 +542,14 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
       plugins: {
         legend: {display: false},
         tooltip: {
-          filter: (item) => item.dataset.label !== "Allowed" && item.dataset.label !== "Recession line",
-          callbacks: {
-            label: (item) => {
-              const l = item.dataset.label;
-              if (l === "R1") return `R1 = S_P − S_B = ${fmt(row.r1)} cm`;
-              if (l === "R2") return `R2 = S_P − S_L = ${fmt(row.r2)} cm`;
-              return `${l}: ${item.parsed.y.toFixed(2)} cm`;
-            },
-          },
+          filter: (item) => item.dataset.label === "GWSa" || (item.dataset.label === "Filled" && item.raw?.f),
+          callbacks: {label: (item) => `${item.dataset.label === "Filled" ? "Filled" : "Observed"}: ${item.parsed.y.toFixed(2)} cm (click to set as trough or peak)`},
         },
       },
     },
   });
 
-  // Side panel: this year's numbers.
+  // Side panel: how this year's numbers come out.
   if (row.error) {
     side.append(el("p", "rc-editor-error", row.error));
   } else {
@@ -481,21 +559,23 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
       if (color) dt.style.borderLeft = `4px solid ${color}`;
       dl.append(dt, el("dd", null, value));
     };
-    const when = (i) => dates[i].toLocaleDateString("en-US", {month: "short", year: "numeric"});
-    item(`Trough S_B (${when(row.trough)})`, `${fmt(row.sB)} cm`, COLOR.trough);
-    item(`Peak S_P (${when(row.peak)})`, `${fmt(row.sP)} cm`, COLOR.peak);
-    item("Recession S_L at peak", `${fmt(row.sL)} cm`, COLOR.recession);
-    item("R1 (lower)", `${fmt(row.r1)} cm${areaKm2 ? ` · ${fmt(toKm3(row.r1, areaKm2), 2)} km³` : ""}`, COLOR.r1);
-    item("R2 (upper)", `${fmt(row.r2)} cm${areaKm2 ? ` · ${fmt(toKm3(row.r2, areaKm2), 2)} km³` : ""}`, COLOR.r2);
+    item(`▼ Trough S_B, ${when(row.trough)}`, `${fmt(row.sB)} cm`, COLOR.trough);
+    item(`▲ Peak S_P, ${when(row.peak)}`, `${fmt(row.sP)} cm`, COLOR.peak);
+    item("Recession line at peak, S_L", `${fmt(row.sL)} cm`, COLOR.recession);
+    item("R1 = S_P − S_B", `${fmt(row.r1)} cm`, COLOR.r1);
+    item("R2 = S_P − S_L", `${fmt(row.r2)} cm`, COLOR.r2);
+    if (areaKm2) {
+      item("R1 as volume", `${fmt(toKm3(row.r1, areaKm2), 2)} km³`);
+      item("R2 as volume", `${fmt(toKm3(row.r2, areaKm2), 2)} km³`);
+    }
     side.append(dl);
+    const {from} = row.recession;
+    side.append(el("p", "rc-stat-note", from < row.trough
+      ? `Recession line: a straight line fitted to GWSa from ${when(from)} to ${when(row.trough)} (solid), extended to the peak month (dashed). S_L is where storage would have been at the peak if the decline had continued with no recharge.`
+      : "GWSa was not declining before the trough, so there is no drainage to correct for and S_L = S_B (R2 = R1)."));
+    const notes = notesFor(row);
+    if (notes) side.append(el("p", "rc-stat-note rc-editor-notes", notes));
   }
-  const notes = notesFor(row);
-  if (notes && !row.error) side.append(el("p", "rc-stat-note", notes));
-  const reset = el("button", "rc-button", "Reset this year");
-  reset.type = "button";
-  reset.disabled = !row.overridden.length;
-  reset.addEventListener("click", () => onReset(row.waterYear));
-  side.append(reset);
 
   return {node, chart};
 };
@@ -712,7 +792,7 @@ export function openRechargeView({name, dates, values, uncertainty = null, areaK
     let first = 0;
     while (!Number.isFinite(fill.trend[first])) first++;
     const state = {name, dates, months, values, fill, areaKm2, first, startMonth: s.troughMonth, startMonthChoice: null, overrides: {},
-      selectedYear: null, editMode: "trough"};
+      selectedYear: null};
     stepYear = (dir) => state.step?.(dir);
     const holder = el("div");
     body.append(holder);

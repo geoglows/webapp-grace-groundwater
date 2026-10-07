@@ -1366,7 +1366,8 @@ body.panel-resizing * {
 }
 
 .rc-canvas-editor {
-    height: 340px;
+    position: relative;
+    height: 380px;
 }
 
 .rc-editor-side {
@@ -1411,4 +1412,72 @@ body.panel-resizing * {
 
 .rc-row-selected td {
     background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.rc-editor-help {
+    margin: 0 0 10px;
+    font-size: 13px;
+}
+
+.rc-pop {
+    position: absolute;
+    z-index: 5;
+    width: 240px;
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
+.rc-pop.hidden {
+    display: none;
+}
+
+.rc-pop-title {
+    margin: 0 0 8px;
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.rc-pop-btn,
+.rc-pop-cancel {
+    display: block;
+    width: 100%;
+    margin-top: 6px;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--surface2);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+}
+
+.rc-pop-btn:not(:disabled):hover {
+    border-color: var(--accent);
+}
+
+.rc-pop-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.rc-pop-cancel {
+    background: transparent;
+    text-align: center;
+    color: var(--text-faint);
+}
+
+.rc-pop-why {
+    margin: 2px 2px 0;
+    color: var(--text-faint);
+    font-size: 11.5px;
+    line-height: 1.35;
+}
+
+.rc-editor-notes {
+    color: var(--text-dim);
 }
