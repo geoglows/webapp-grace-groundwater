@@ -169,6 +169,9 @@ const downloadCsv = (csv, filename) => {
  * for the missing months (gapFill.js) as a second, dashed line with hollow
  * markers, so a filled month is never mistaken for a measured one.
  *
+ * `onRecharge`, when given, adds a Recharge Analysis button while `gapFill` is
+ * "seasonal"; main.js opens the recharge page from it.
+ *
  * Returns {setMarker(date), destroy()}.
  */
 export function renderTimeseriesChart({
@@ -180,6 +183,7 @@ export function renderTimeseriesChart({
   gapFill = "line",
   fileStem,
   getCsv,
+  onRecharge = null,
 }) {
   const multiple = series.length > 1;
   // Only "line" lets the observed line run across a gap; with the seasonal
@@ -290,7 +294,30 @@ export function renderTimeseriesChart({
     }
   });
 
-  wrapper.append(canvasBox, downloadButton);
+  // The recharge page needs the seasonal model's filled series, so it is only
+  // offered while the chart shows it.
+  const actions = document.createElement("div");
+  actions.className = "ts-actions";
+  if (onRecharge && gapFill === "seasonal") {
+    const rechargeButton = document.createElement("button");
+    rechargeButton.type = "button";
+    rechargeButton.className = "ts-download ts-recharge";
+    rechargeButton.textContent = "Recharge Analysis";
+    rechargeButton.title = "Estimate annual recharge from GWSa with the water table fluctuation method";
+    rechargeButton.addEventListener("click", async () => {
+      rechargeButton.disabled = true;
+      try {
+        await onRecharge();
+      } catch (err) {
+        console.error("Could not open the recharge analysis", err);
+      } finally {
+        rechargeButton.disabled = false;
+      }
+    });
+    actions.append(rechargeButton);
+  }
+  actions.append(downloadButton);
+  wrapper.append(canvasBox, actions);
   container.append(wrapper);
 
   const axisText = token("--chart-text", "#b6c2d3");

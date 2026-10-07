@@ -49,6 +49,7 @@ import {
 } from "./settings.js";
 import {initPanelSplitter} from "./splitPanels.js";
 import {renderTimeseriesChart, seriesToCsv} from "./timeseriesChart.js";
+import {openRechargeView} from "./rechargeView.js";
 import {pruneStaleCache} from "./db.js";
 import {initTheme, isLight, onThemeChange, setTheme, theme} from "./theme.js";
 import {openZarrArray} from "./zarrStore.js";
@@ -1367,6 +1368,25 @@ const plotPickedCell = async (lon, lat) => {
       }
       return seriesToCsv({dates: timeDates, series: cols});
     },
+    // Recharge is a groundwater quantity, so the page always works on GWSa,
+    // whichever layer the chart is showing.
+    onRecharge: async () => {
+      await ensureGlobalData("GWSa");
+      const coords = await ensureCoords(resolutionOf("GWSa"));
+      const {iy, ix} = cellIndexAt(lon, lat, coords);
+      const data = globalView.byVar.GWSa?.data;
+      if (!data) return;
+      if (!geodeticAreaOperator.isLoaded()) await geodeticAreaOperator.load();
+      const half = (coords.lat.data[1] - coords.lat.data[0]) / 2;
+      const cell = cellPolygonFromCenter({xCenter: coords.lon.data[ix], yCenter: coords.lat.data[iy], halfWidth: half});
+      openRechargeView({
+        name: `Cell at ${formatLatLon(coords.lat.data[iy], coords.lon.data[ix])}`,
+        dates: timeDates,
+        values: cellSeries(data, iy, ix),
+        uncertainty: await cellUncertainty("GWSa", iy, ix),
+        areaKm2: geodeticAreaOperator.execute(cell) / 1e6,
+      });
+    },
   });
   activeChart.setMarker(timeControl?.currentDate ?? null);
   setBreadcrumb(formatLatLon(pickedCell?.lat ?? lat, pickedCell?.lon ?? lon), {home: false});
@@ -2324,6 +2344,19 @@ const main = async ({polygon, zoomTarget}) => {
         return seriesToCsv({
           dates: timeDates,
           series: all.filter((v) => varData[v]?.hasData).map(seriesFor),
+        });
+      },
+      // Always GWSa, whichever layer is displayed: recharge is a groundwater
+      // quantity. The name is the region's, as the breadcrumb shows it.
+      onRecharge: async () => {
+        const d = await loadVarData("GWSa");
+        if (!d?.hasData) return;
+        openRechargeView({
+          name: breadcrumb.querySelector(".rfs-crumb-current")?.textContent || "Selected region",
+          dates: timeDates,
+          values: d.meanSeries,
+          uncertainty: d.uncMeanSeries,
+          areaKm2: geodeticAreaOperator.execute(polygon) / 1e6,
         });
       },
     });

@@ -961,3 +961,191 @@ body.panel-resizing * {
 .rfs-attribution.hidden {
     display: none;
 }
+
+/* ------------------------------------------------------------------ *
+ * Recharge Analysis page (rechargeView.js). A full-window view over the
+ * app, so the map and its state are untouched underneath and Back simply
+ * removes it.
+ * ------------------------------------------------------------------ */
+.rc-view {
+    position: fixed;
+    inset: 0;
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Open Sans", "Segoe UI", system-ui, sans-serif;
+}
+
+.rc-header {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 12px 24px;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+}
+
+.rc-back {
+    flex: 0 0 auto;
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.rc-back:hover {
+    border-color: var(--accent);
+}
+
+.rc-title {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 700;
+}
+
+.rc-subtitle {
+    margin: 2px 0 0;
+    color: var(--text-faint);
+    font-size: 14px;
+}
+
+.rc-body {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 24px;
+}
+
+.rc-section {
+    max-width: 1200px;
+    margin: 0 auto 32px;
+}
+
+.rc-heading {
+    margin: 0 0 14px;
+    font-size: 17px;
+    font-weight: 700;
+}
+
+.rc-verdict {
+    margin-bottom: 18px;
+    padding: 14px 18px;
+    border: 1px solid var(--border);
+    border-left-width: 6px;
+    border-radius: var(--r-lg);
+    background: var(--surface);
+}
+
+.rc-verdict-good { border-left-color: #22c55e; }
+.rc-verdict-marginal { border-left-color: #f59e0b; }
+.rc-verdict-poor { border-left-color: #ef4444; }
+
+.rc-verdict-title {
+    margin: 0 0 4px;
+    font-size: 16px;
+    font-weight: 700;
+}
+
+.rc-verdict-text {
+    margin: 0;
+    color: var(--text-dim);
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+.rc-season-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+    gap: 20px;
+}
+
+@media (max-width: 900px) {
+    .rc-season-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.rc-stats {
+    display: grid;
+    gap: 10px;
+    margin: 0;
+}
+
+.rc-stat {
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface);
+}
+
+.rc-stat dt {
+    color: var(--text-faint);
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.rc-stat dd {
+    margin: 2px 0 0;
+    font-size: 18px;
+    font-weight: 700;
+}
+
+.rc-stat-note {
+    margin: 4px 0 0;
+    color: var(--text-faint);
+    font-size: 12.5px;
+    line-height: 1.4;
+}
+
+.rc-season-chart {
+    display: flex;
+    flex-direction: column;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface);
+}
+
+.rc-chart-title {
+    margin: 0 0 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-dim);
+}
+
+.rc-canvas {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 260px;
+}
+
+.rc-empty {
+    max-width: 720px;
+    margin: 40px auto;
+    color: var(--text-dim);
+}
+
+.ts-actions {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    z-index: 1;
+    display: flex;
+    gap: 6px;
+}
+
+.ts-actions .ts-download {
+    position: static;
+}
+
+/* The way into the recharge page; accented so it reads as a step onward
+   rather than one more export. */
+.ts-actions .ts-recharge {
+    border-color: var(--accent);
+    color: var(--accent);
+    font-weight: 600;
+}
