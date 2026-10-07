@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node test/gapFill.test.mjs"
+    "test": "node test/gapFill.test.mjs && node test/recharge.test.mjs"
   },
   "dependencies": {
     "@arcgis/core": "^5.1.10",
