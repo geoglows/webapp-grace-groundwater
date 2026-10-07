@@ -83,15 +83,15 @@ class Gldas:
             print(f"[{self.model}] \"Downscaling\" from {self.resolution} to {resolution} degree")
             ds = ds.reindex({self.lat_variable: lats, self.lon_variable: lons}, method='nearest')
 
-        print(f"[{self.model}] Computing anomalies against 200204-200912 baseline")
+        print(f"[{self.model}] Computing anomalies against 200401-200912 baseline")
         # GLDAS variables are kg/m2 or mm so divide by 10 to get cm to match GRACE
         # skipna=False prevents turning nans to zero
         ds['SWE'] = ds[self.snow_water_variables].to_dataarray(dim='variable').sum(dim='variable', skipna=False) / 10
         ds['CAN'] = ds[self.canopy_variables].to_dataarray(dim='variable').sum(dim='variable', skipna=False) / 10
         ds['SM'] = ds[self.soil_moisture_variables].to_dataarray(dim='variable').sum(dim='variable', skipna=False) / 10
-        ds['SWE_baseline'] = ds['SWE'].sel(time=slice('2002-04-01', '2009-12-31')).mean(dim='time')
-        ds['CAN_baseline'] = ds['CAN'].sel(time=slice('2002-04-01', '2009-12-31')).mean(dim='time')
-        ds['SM_baseline'] = ds['SM'].sel(time=slice('2002-04-01', '2009-12-31')).mean(dim='time')
+        ds['SWE_baseline'] = ds['SWE'].sel(time=slice('2004-01-01', '2009-12-31')).mean(dim='time')
+        ds['CAN_baseline'] = ds['CAN'].sel(time=slice('2004-01-01', '2009-12-31')).mean(dim='time')
+        ds['SM_baseline'] = ds['SM'].sel(time=slice('2004-01-01', '2009-12-31')).mean(dim='time')
         ds['SWEa'] = ds['SWE'] - ds['SWE_baseline']
         ds['CANa'] = ds['CAN'] - ds['CAN_baseline']
         ds['SMa'] = ds['SM'] - ds['SM_baseline']
