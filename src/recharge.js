@@ -194,6 +194,7 @@ export function waterTableFluctuation(fill, months, startMonth, overrides = {}) 
 
     Object.assign(row, {
       recessionStart,
+      sA, // position of the peak the recession starts from
       fitStart,
       trough,
       peak,

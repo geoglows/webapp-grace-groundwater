@@ -350,6 +350,7 @@ const swatchFor = (kind) => {
     filled: `<svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="${COLOR.filled}" stroke-width="2"/><circle cx="11" cy="5" r="3" fill="${COLOR.filled}"/></svg>`,
     trough: `<svg width="14" height="12"><path d="M1 1 L13 1 L7 11 Z" fill="${COLOR.trough}"/></svg>`,
     peak: `<svg width="14" height="12"><path d="M1 11 L13 11 L7 1 Z" fill="${COLOR.peak}"/></svg>`,
+    prevPeak: `<svg width="14" height="12"><path d="M1.5 10.5 L12.5 10.5 L7 1.5 Z" fill="none" stroke="${COLOR.peak}" stroke-width="1.6"/></svg>`,
     fitted: `<svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="${COLOR.recession}" stroke-width="3"/></svg>`,
     extended: `<svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="${COLOR.recession}" stroke-width="2" stroke-dasharray="5 3"/></svg>`,
     r1: `<svg width="10" height="14"><rect x="2" y="0" width="6" height="14" fill="${COLOR.r1}"/></svg>`,
@@ -426,6 +427,7 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
   key(swatchFor("filled"), "Filled month (seasonal model)");
   key(swatchFor("trough"), "Trough S_B");
   key(swatchFor("peak"), "Peak S_P");
+  key(swatchFor("prevPeak"), "Previous peak S_A");
   key(swatchFor("fitted"), "Recession line, fitted");
   key(swatchFor("extended"), "projected from trough to peak");
   key(swatchFor("r1"), "R1");
@@ -475,6 +477,9 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
         pointBackgroundColor: COLOR.trough, pointBorderColor: "#fff", pointBorderWidth: 1, order: 0},
       {label: "Peak", data: [{x: x(row.peak), y: row.sP}], showLine: false, pointStyle: "triangle", pointRadius: 10,
         pointBackgroundColor: COLOR.peak, pointBorderColor: "#fff", pointBorderWidth: 1, order: 0},
+      // S_A, where the recession is fitted from: last year's peak, hollow.
+      {label: "Previous peak", data: [{x: x(row.sA), y: fill.filled[row.sA]}], showLine: false, pointStyle: "triangle", pointRadius: 9,
+        pointBackgroundColor: "rgba(0,0,0,0)", pointBorderColor: COLOR.peak, pointBorderWidth: 2, order: 0},
     );
   }
 
@@ -498,6 +503,7 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
       const [pP, pB, pL] = [row.sP, row.sB, row.sL].map((v) => sy.getPixelForValue(v));
       const r2y = pL - pB >= 36 ? (pB + pL) / 2 : (pP + pB) / 2;
       put(`R2 = ${fmt(row.r2, 1)} cm`, sx.getPixelForValue(barX2) + 8, r2y, COLOR.r2);
+      put("S_A", sx.getPixelForValue(x(row.sA)) - 14, sy.getPixelForValue(fill.filled[row.sA]) - 4, COLOR.peak, "right");
       put("S_P", sx.getPixelForValue(barX2) + 14, sy.getPixelForValue(row.sP), COLOR.peak);
       put("S_B", sx.getPixelForValue(barX2) + 14, sy.getPixelForValue(row.sB), COLOR.trough);
       if (row.sL < row.sB - 0.05) put("S_L", sx.getPixelForValue(barX2) + 14, sy.getPixelForValue(row.sL), COLOR.recession);
