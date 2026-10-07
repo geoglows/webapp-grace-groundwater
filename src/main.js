@@ -323,7 +323,11 @@ const syncSettingsControls = () => {
   masconWidthValue.textContent = `${displayConfig.masconWidth}px`;
   dynamicScaleToggle.checked = displayConfig.dynamicColorScale;
   // The fixed range is configurable, so the sentence explaining it has to be too.
-  dynamicScaleNote.textContent = `When enabled, the color scale fits the actual min/max values in the selected region, with 0 always shown as the center color. When disabled, uses a fixed range of -${displayConfig.fixedMaxValue} to +${displayConfig.fixedMaxValue} ${UNITS}.`;
+  // The two dynamic fits are different on purpose: the global one is the 95th
+  // percentile (computeFrameStats in globalData.js) because ice-sheet margins
+  // would otherwise stretch the ramp until every aquifer reads as white, while a
+  // region is small enough that its true maximum is the useful bound.
+  dynamicScaleNote.textContent = `When enabled, the global map's scale runs to the 95th percentile of |value| over all cells and months, so a few extreme cells saturate. In a region it runs to the largest |value| among the region's cells over all months. 0 is always the center color. When disabled, the range is fixed at -${displayConfig.fixedMaxValue} to +${displayConfig.fixedMaxValue} ${UNITS}.`;
 };
 
 // The displayed layer is checked and locked: the chart always carries what the
