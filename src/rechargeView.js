@@ -490,7 +490,11 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
         ctx.fillText(text, px, py);
       };
       put(`R1 = ${fmt(row.r1, 1)} cm`, sx.getPixelForValue(barX1) - 8, sy.getPixelForValue((row.sB + row.sP) / 2), COLOR.r1, "right");
-      put(`R2 = ${fmt(row.r2, 1)} cm`, sx.getPixelForValue(barX2) + 8, sy.getPixelForValue((row.sL + row.sP) / 2), COLOR.r2);
+      // The R2 bar crosses the S_B level, whose label sits beside it, so its own
+      // label goes below S_B, where the curve rarely is, when there is room.
+      const [pP, pB, pL] = [row.sP, row.sB, row.sL].map((v) => sy.getPixelForValue(v));
+      const r2y = pL - pB >= 36 ? (pB + pL) / 2 : (pP + pB) / 2;
+      put(`R2 = ${fmt(row.r2, 1)} cm`, sx.getPixelForValue(barX2) + 8, r2y, COLOR.r2);
       put("S_P", sx.getPixelForValue(barX2) + 14, sy.getPixelForValue(row.sP), COLOR.peak);
       put("S_B", sx.getPixelForValue(barX2) + 14, sy.getPixelForValue(row.sB), COLOR.trough);
       if (row.sL < row.sB - 0.05) put("S_L", sx.getPixelForValue(barX2) + 14, sy.getPixelForValue(row.sL), COLOR.recession);
