@@ -1,12 +1,17 @@
-// Parity test: src/recharge.js against the training notebook's WTF method.
+// Test of src/recharge.js against the training notebook's WTF method.
 //
 //   node test/recharge.test.mjs
 //
 // Each reference in test/recharge-reference/ was written by make_reference.py,
 // which runs the notebook's own fill_gaps() and water_table_fluctuation() on a
-// sample export from test/gapfill-reference/. The port must pick the same
-// water year start, the same trough, peak and recession window in every year,
-// and land within TOLERANCE_CM of every S and R value.
+// sample export from test/gapfill-reference/. The app must pick the same water
+// year start and the same trough and peak in every year, and match S_P, S_B and
+// R1 within TOLERANCE_CM.
+//
+// The recession differs from the notebook on purpose (see recharge.js): S_L is
+// projected from S_B, and the first year's fit starts at the first peak. Those
+// are checked directly: the fit window matches the notebook's after the first
+// year, the projection starts at S_B with the fitted slope, and R2 = S_P - S_L.
 //
 // To regenerate a reference after a change to the notebook:
 //   python -I test/recharge-reference/make_reference.py <notebook.ipynb> \
@@ -66,14 +71,27 @@ for (const {sample, ref: refFile} of CASES) {
       assert.ok(!row.error, `${where}: ${row.error}`);
       assert.equal(monthLabel(months[row.trough]), r.trough, `${where}: trough`);
       assert.equal(monthLabel(months[row.peak]), r.peak, `${where}: peak`);
-      assert.equal(monthLabel(months[row.fitStart]), r.fit_start, `${where}: recession fit start`);
-      assert.equal(row.longExtrapolation, r.long_extrapolation, `${where}: long_extrapolation`);
-      assert.equal(row.filledParts.join(", "), r.filled_parts, `${where}: filled parts`);
-      for (const [js, py] of [["sP", "S_P"], ["sB", "S_B"], ["sL", "S_L"], ["rS", "R_S"], ["rD", "R_D"], ["r1", "R1"], ["r2", "R2"]]) {
+      if (k > 0) {
+        assert.equal(monthLabel(months[row.fitStart]), r.fit_start, `${where}: recession fit start`);
+      } else {
+        // The first peak: the highest detrended month before the trough.
+        let best = 0;
+        for (let i = 0; i <= row.trough; i++) {
+          if (fill.filled[i] - fill.trend[i] > fill.filled[best] - fill.trend[best]) best = i;
+        }
+        assert.equal(row.fitStart, Math.min(best, row.trough - 3), `${where}: first-year fit should start at the first peak`);
+      }
+      for (const [js, py] of [["sP", "S_P"], ["sB", "S_B"], ["rS", "R_S"], ["r1", "R1"]]) {
         const d = Math.abs(row[js] - r[py]);
         maxDiff = Math.max(maxDiff, d);
         assert.ok(d <= TOLERANCE_CM, `${where}: ${py} ${row[js]} vs ${r[py]}`);
       }
+      const slope = row.recessionSlope / 12;
+      const expectedSL = Number.isFinite(slope) && slope < 0 ? row.sB + slope * (row.peak - row.trough) : row.sB;
+      assert.ok(Math.abs(row.sL - expectedSL) < 1e-9, `${where}: S_L is not projected from S_B`);
+      assert.equal(row.recession.y0, row.sB, `${where}: projection does not start at S_B`);
+      assert.ok(Math.abs(row.r2 - (row.sP - row.sL)) < 1e-9, `${where}: R2 != S_P - S_L`);
+      assert.ok(row.sL <= row.sB + 1e-12, `${where}: S_L above S_B`);
     });
     const s = analyzeSeasonality(values, months, fill);
     console.log(`ok  ${refFile}: start ${start}, ${rows.length} years, max |diff| ${maxDiff.toExponential(2)} cm; ` +

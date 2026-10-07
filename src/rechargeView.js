@@ -184,6 +184,8 @@ const picksChart = (canvas, state, rows, selectedRow, onSelectYear) => {
   const troughs = ok.map((r) => ({x: x(r.trough), y: r.sB, year: r.waterYear}));
   const lines = [];
   for (const r of ok) {
+    const {fit} = r.recession;
+    if (fit) lines.push({x: x(fit.from), y: fit.y0}, {x: x(fit.to), y: fit.y1}, {x: x(fit.to), y: null});
     lines.push({x: x(r.recession.from), y: r.recession.y0}, {x: x(r.recession.to), y: r.recession.y1}, {x: x(r.recession.to), y: null});
   }
   const c = axisColors();
@@ -398,7 +400,7 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
 
   const [pLo, pHi] = allowedRange(state, rows, k, "peak");
   const [tLo, tHi] = allowedRange(state, rows, k, "trough");
-  const start = Math.max(state.first, Math.min(row.error ? row.yearFirst : row.recession.from, tLo, row.yearFirst) - 1);
+  const start = Math.max(state.first, Math.min(row.error ? row.yearFirst : (row.recession.fit?.from ?? row.trough), tLo, row.yearFirst) - 1);
   const end = Math.min(dates.length - 1, row.yearFirst + 13);
 
   const obs = [];
@@ -422,7 +424,7 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
   key(swatchFor("trough"), "Trough S_B");
   key(swatchFor("peak"), "Peak S_P");
   key(swatchFor("fitted"), "Recession line, fitted");
-  key(swatchFor("extended"), "extended to peak");
+  key(swatchFor("extended"), "projected from trough to peak");
   key(swatchFor("r1"), "R1");
   key(swatchFor("r2"), "R2");
   node.append(legend);
@@ -447,15 +449,14 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
   const barX1 = row.error ? 0 : x(row.peak) + 25 * DAY;
   const barX2 = row.error ? 0 : x(row.peak) + 55 * DAY;
   if (!row.error) {
-    const {from, to, y0, y1} = row.recession;
-    const slope = to > from ? (y1 - y0) / (to - from) : 0;
-    const declining = from < row.trough;
-    if (declining) {
-      // The part the line was fitted on, solid; its extension to the peak, dashed.
+    const {fit, from, to, y0, y1} = row.recession;
+    if (fit) {
+      // The line fitted to the decline, solid; the projection from the trough
+      // to the peak at the same slope, dashed.
       datasets.push(
-        {label: "Recession line (fitted)", data: [{x: x(from), y: y0}, {x: x(row.trough), y: y0 + slope * (row.trough - from)}],
+        {label: "Recession line (fitted)", data: [{x: x(fit.from), y: fit.y0}, {x: x(fit.to), y: fit.y1}],
           borderColor: COLOR.recession, borderWidth: 3, pointRadius: 0, order: 1},
-        {label: "Recession line (extended)", data: [{x: x(row.trough), y: y0 + slope * (row.trough - from)}, {x: x(to), y: y1}],
+        {label: "Recession line (extended)", data: [{x: x(from), y: y0}, {x: x(to), y: y1}],
           borderColor: COLOR.recession, borderWidth: 2, borderDash: [6, 4], pointRadius: 0, order: 1},
       );
     }
@@ -615,9 +616,9 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
       item(el("span", "rc-sw"), "R2 as volume", `${fmt(toKm3(row.r2, areaKm2), 2)} km³`);
     }
     side.append(dl);
-    const {from} = row.recession;
-    side.append(el("p", "rc-stat-note", from < row.trough
-      ? `Recession line: a straight line fitted to GWSa from ${when(from)} to ${when(row.trough)} (solid), extended to the peak month (dashed). S_L is where storage would have been at the peak if the decline had continued with no recharge.`
+    const {fit} = row.recession;
+    side.append(el("p", "rc-stat-note", fit
+      ? `Recession line: a straight line fitted to GWSa from ${when(fit.from)} to ${when(fit.to)} (solid). Its slope is carried on from the trough to the peak month (dashed); S_L is where it ends, the level storage would have reached with no recharge.`
       : "GWSa was not declining before the trough, so there is no drainage to correct for and S_L = S_B (R2 = R1)."));
     const notes = notesFor(row);
     if (notes) side.append(el("p", "rc-stat-note rc-editor-notes", notes));
@@ -642,7 +643,7 @@ const analysisSection = (state, rerender) => {
   intro.innerHTML =
     "For each water year the method takes the <b>peak</b> (S<sub>P</sub>, the highest month after removing the long-term trend), " +
     "the <b>trough</b> before it (S<sub>B</sub>), and a <b>recession line</b> fitted to the decline from the previous peak to the " +
-    "trough and extended to the peak month (S<sub>L</sub>). Check each year in the editor below the chart; if a pick lands on a noisy spike, move it.";
+    "trough, whose slope is carried on from the trough to the peak month (S<sub>L</sub>). Check each year in the editor below the chart; if a pick lands on a noisy spike, move it.";
   s2.append(intro);
 
   const controls = el("div", "rc-controls");

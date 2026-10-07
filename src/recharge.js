@@ -2,11 +2,13 @@
 // (WTF) method, plus a check of whether the series has the clear annual cycle
 // the method needs.
 //
-// waterTableFluctuation() is a port of water_table_fluctuation() in the
-// training notebook (grace_gap_fill_and_recharge.ipynb) and is tested against
-// it in test/recharge.test.mjs. It takes the output of seasonalFill() in
-// gapFill.js, which is itself the notebook's fill, so the app and the notebook
-// give the same recharge for the same series.
+// waterTableFluctuation() started as a port of water_table_fluctuation() in the
+// training notebook (grace_gap_fill_and_recharge.ipynb) and picks the same
+// troughs and peaks (test/recharge.test.mjs). It differs in two places, both
+// to follow Barbosa et al. (2022) more closely: the projection to the peak
+// starts at the trough, and the first water year's recession starts at its
+// highest month rather than the first month of the record. It takes the output
+// of seasonalFill() in gapFill.js.
 //
 // Months are integer month indices (year * 12 + zero-based month), as
 // monthIndexOf() in gapFill.js returns. Calendar months in the public API are
@@ -102,9 +104,11 @@ const lineFit = (series, from, to) => {
  *   S_P  filled value at the highest detrended month in the water year
  *   S_B  filled value at the lowest detrended month between the previous peak
  *        and this peak
- *   S_L  recession line, fitted from the previous peak (S_A) to S_B, or to the
- *        MIN_RECESSION_MONTHS months ending at S_B if that is longer, and
- *        extended to the peak month; S_B when the line is flat or rising
+ *   S_L  recession projected from S_B to the peak month at the slope of a line
+ *        fitted from the previous peak (S_A) to S_B, or to the
+ *        MIN_RECESSION_MONTHS months ending at S_B if that is longer; S_B
+ *        when the fitted line is flat or rising. In the first water year,
+ *        S_A is the highest detrended month before the trough.
  *   R_S = S_P - S_B      R_D = max(S_B - S_L, 0)
  *   R1  = R_S (lower)    R2  = R_S + R_D (upper)
  *
@@ -143,22 +147,34 @@ export function waterTableFluctuation(fill, months, startMonth, overrides = {}) 
     const sP = series[peak];
     const sB = series[trough];
 
-    let fitStart = recessionStart;
+    // The recession is fitted from S_A, the previous peak, down to S_B. The
+    // first water year has no previous peak, so S_A is the highest detrended
+    // month before its trough; starting at the first month of the record
+    // instead would fit across whatever rise and fall came before it.
+    const sA = previousPeak ?? argExtreme(detrended, first, trough, 1);
+    let fitStart = sA;
     const shortestStart = trough - (MIN_RECESSION_MONTHS - 1);
     if (fitStart > shortestStart) fitStart = Math.max(shortestStart, first);
 
+    // S_L: the recession carried on from the trough to the peak month at the
+    // fitted slope, so the projection starts at S_B itself rather than at the
+    // fitted line's value there.
     const line = lineFit(series, fitStart, trough);
     let slope;
     let sL;
-    let recession; // the line as drawn: {from, to, y0, y1}, array positions and cm
+    // As drawn: the fitted line over its window, and the projection from S_B.
+    let recession;
     if (!line || line.slope >= 0) {
       slope = line ? line.slope : NaN;
       sL = sB;
-      recession = {from: trough, to: peak, y0: sB, y1: sB};
+      recession = {fit: null, from: trough, to: peak, y0: sB, y1: sB};
     } else {
       slope = line.slope;
-      sL = line.intercept + slope * (peak - fitStart);
-      recession = {from: fitStart, to: peak, y0: line.intercept, y1: sL};
+      sL = sB + slope * (peak - trough);
+      recession = {
+        fit: {from: fitStart, to: trough, y0: line.intercept, y1: line.intercept + slope * (trough - fitStart)},
+        from: trough, to: peak, y0: sB, y1: sL,
+      };
     }
 
     const fittedSpan = trough - fitStart;
