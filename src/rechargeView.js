@@ -400,7 +400,10 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
 
   const [pLo, pHi] = allowedRange(state, rows, k, "peak");
   const [tLo, tHi] = allowedRange(state, rows, k, "trough");
-  const start = Math.max(state.first, Math.min(row.error ? row.yearFirst : (row.recession.fit?.from ?? row.trough), tLo, row.yearFirst) - 1);
+  // From the previous year's trough, so the whole rise to the previous peak and
+  // the recession from it are in view; the first year starts with the record.
+  const prevTrough = rows.slice(0, k).reverse().find((r) => !r.error)?.trough;
+  const start = Math.max(state.first, Math.min(prevTrough ?? state.first, row.error ? row.yearFirst : (row.recession.fit?.from ?? row.trough), tLo) - 1);
   const end = Math.min(dates.length - 1, row.yearFirst + 13);
 
   const obs = [];
