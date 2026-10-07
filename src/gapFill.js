@@ -4,8 +4,8 @@
 // (training.geoglows.org: grace_gap_fill_and_recharge.ipynb, after Barbosa et
 // al. 2022), which fills the same months with the same values:
 // test/gapFill.test.mjs checks this one against the notebook's saved output.
-// The notebook has since been retired, and the training site's Gap-Filling
-// Method page (docs/grace/gap-filling/method.en.md) documents this code, so
+// The notebook has since been retired, and the training site's Seasonal Model
+// page (docs/grace/gap-filling/seasonal-model.en.md) documents this code, so
 // update that page with any change to the method here.
 //
 //   Y(t) = continuous piecewise-linear trend + 12 monthly levels,
