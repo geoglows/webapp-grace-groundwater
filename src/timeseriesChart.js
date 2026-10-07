@@ -69,6 +69,14 @@ const withAlpha = (hex, alpha) => {
 const isoDay = (date) =>
   `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 
+// Three decimals in cm is 10 micrometres of water, well inside the smallest
+// uncertainty any of these products carries, so nothing real is lost. The float
+// tails that would otherwise be written (15+ digits from the area-weighted
+// means) suggest a precision the data does not have and triple the file size.
+// Number() drops trailing zeros, and String(-0) is "0", so a value that rounds
+// to zero does not come out as "-0".
+const csvNumber = (v) => String(Number(v.toFixed(3)));
+
 /**
  * One column per variable, whatever is currently plotted — a file that changes
  * shape with the chart is a worse record of the region than one that always
@@ -90,11 +98,13 @@ export const seriesToCsv = ({dates, series}) => {
     for (const s of series) {
       const center = s.values[i];
       const has = Number.isFinite(center);
-      cells.push(has ? center : "");
+      cells.push(has ? csvNumber(center) : "");
       if (s.uncertainty) {
         const unc = s.uncertainty[i];
         const band = has && Number.isFinite(unc);
-        cells.push(band ? center + unc : "", band ? center - unc : "");
+        // Bounds are taken from the unrounded center, then rounded, so they sit
+        // within half a thousandth of the true center ± uncertainty.
+        cells.push(band ? csvNumber(center + unc) : "", band ? csvNumber(center - unc) : "");
       }
     }
     rows.push(cells.join(","));
