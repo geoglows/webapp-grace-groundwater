@@ -94,7 +94,7 @@ const seasonalitySection = (s) => {
   stat("Share of variation that is seasonal", pct(s.explained),
     "How much of the month-to-month variation around the long-term trend the average annual cycle accounts for. Above 40% is a clear cycle.");
   stat("Years peaking at the usual time", `${Math.round(s.regularity * s.years)} of ${s.years}`,
-    `Years whose high falls within a month of ${MONTH_NAMES[s.peakMonth - 1]}. Above 70% is a regular cycle.`);
+    `Years whose high falls within two months of ${MONTH_NAMES[s.peakMonth - 1]}. Above 70% is a regular cycle.`);
   stat("Usual low and high", `${MONTH_NAMES[s.troughMonth - 1]} and ${MONTH_NAMES[s.peakMonth - 1]}`,
     `Each water year starts in ${MONTH_NAMES[s.troughMonth - 1]}, the usual low, so it holds one full rise.`);
 

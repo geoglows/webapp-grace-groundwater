@@ -224,6 +224,11 @@ export function waterTableFluctuation(fill, months, startMonth, overrides = {}) 
 // them, and California's Central Valley, where multi-year droughts dominate, sits
 // between.
 const GOOD = {explained: 0.4, regularity: 0.7};
+// A year counts as regular when its peak falls within this many months of the
+// usual peak. One month was too strict for broad, flat-topped wet seasons such
+// as the Volta basin's, where the single highest month wanders around a
+// plateau of several months while the cycle itself stays clean.
+const PEAK_WINDOW = 2;
 const POOR = {explained: 0.1, regularity: 0.5};
 
 /**
@@ -234,7 +239,7 @@ const POOR = {explained: 0.1, regularity: 0.5};
  *   explained    share of the detrended variance of the observed months that
  *                the average seasonal cycle accounts for (0-1)
  *   regularity   share of complete water years whose detrended peak falls
- *                within a month of peakMonth
+ *                within PEAK_WINDOW months of peakMonth
  *   sigma        median 1-sigma uncertainty of the observed months, cm, or NaN
  *   verdict      "good", "marginal" or "poor"
  */
@@ -274,7 +279,7 @@ export function analyzeSeasonality(values, months, fill, uncertainty = null) {
       if (fill.filled[i] - fill.trend[i] > fill.filled[best] - fill.trend[best]) best = i;
     }
     const off = Math.abs(calendarMonth(months[best]) - peakMonth);
-    if (Math.min(off, 12 - off) <= 1) regular++;
+    if (Math.min(off, 12 - off) <= PEAK_WINDOW) regular++;
   }
   const regularity = years.length ? regular / years.length : 0;
 
