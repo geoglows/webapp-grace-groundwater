@@ -259,7 +259,7 @@ const opacitySlider = document.getElementById("opacity-slider");
 const opacityValue = document.getElementById("opacity-value");
 const paletteSelect = document.getElementById("palette-select");
 const palettePreview = document.getElementById("palette-preview");
-const fillGapsToggle = document.getElementById("fill-gaps-toggle");
+const gapFillControl = document.getElementById("gap-fill-control");
 
 // Build the two lists that are generated from data rather than written out in
 // index.html — the layer dropdown from VARIABLES, the palette radios from
@@ -317,7 +317,7 @@ const syncSettingsControls = () => {
   legendToggle.checked = displayConfig.showLegend;
   regionNamesToggle.checked = displayConfig.showRegionNames;
   masconToggle.checked = displayConfig.showMascons;
-  fillGapsToggle.checked = displayConfig.fillGaps;
+  for (const radio of gapFillControl.querySelectorAll("input")) radio.checked = radio.value === displayConfig.gapFill;
   lightModeToggle.checked = isLight();
   masconWidthSlider.value = String(displayConfig.masconWidth);
   masconWidthValue.textContent = `${displayConfig.masconWidth}px`;
@@ -1292,7 +1292,7 @@ const plotPickedCell = async (lon, lat) => {
       // Only the lone series can show a band, so only then is it worth reading.
       const uncertainty = wanted.length === 1 ? await cellUncertainty(varName, iy, ix) : null;
       if (runId !== analysisRunSeq) return;
-      const entry = {name: varName, longName, color, values, uncertainty};
+      const entry = {name: varName, longName, color, values, uncertainty, grace: VARIABLES[varName].grace};
 
       if (trendState.on) {
         const {from, label} = trendWindow();
@@ -1344,7 +1344,7 @@ const plotPickedCell = async (lon, lat) => {
     series,
     units: UNITS,
     valueLabel: VALUE_LABEL,
-    fillGaps: displayConfig.fillGaps,
+    gapFill: displayConfig.gapFill,
     fileStem: `grace_cell_${lat.toFixed(2)}_${lon.toFixed(2)}`,
     getCsv: async () => {
       const all = Object.keys(VARIABLES);
@@ -1360,6 +1360,7 @@ const plotPickedCell = async (lon, lat) => {
               name: v,
               values: cellSeries(data, iy, ix),
               uncertainty: await cellUncertainty(v, iy, ix),
+              grace: VARIABLES[v].grace,
             });
           }
         } catch { /* a variable that will not load is left out of the file */ }
@@ -2260,7 +2261,7 @@ const main = async ({polygon, zoomTarget}) => {
   };
 
   const seriesFor = (varName) => {
-    const {longName} = VARIABLES[varName];
+    const {longName, grace} = VARIABLES[varName];
     const color = variableColor(varName, isLight());
     const d = varData[varName];
     const entry = {
@@ -2269,6 +2270,7 @@ const main = async ({polygon, zoomTarget}) => {
       color,
       values: d.meanSeries,
       uncertainty: d.uncMeanSeries, // null when the store has no <var>_unc array
+      grace,
     };
 
     // While the region classification is showing, each plotted series carries
@@ -2311,7 +2313,7 @@ const main = async ({polygon, zoomTarget}) => {
       series,
       units: UNITS,
       valueLabel: VALUE_LABEL,
-      fillGaps: displayConfig.fillGaps,
+      gapFill: displayConfig.gapFill,
       fileStem: `grace_${displayConfig.variable.toLowerCase()}`,
       // Every variable, not only the plotted ones: a file whose columns depend
       // on what happened to be toggled is a poor record of the region. The ones
@@ -2790,9 +2792,10 @@ const bootMapUi = async () => {
   });
 
   // Gaps are a chart concern only: the raster and the color bar say nothing
-  // about the months GRACE is missing.
-  fillGapsToggle.addEventListener("change", (e) => {
-    displayConfig.fillGaps = e.target.checked;
+  // about the months GRACE is missing. Trends ignore the setting too — trends.js
+  // fits the observed months whichever way the chart draws the gaps.
+  gapFillControl.addEventListener("change", (e) => {
+    displayConfig.gapFill = e.target.value;
     regionalSeriesHandler?.();
   });
 

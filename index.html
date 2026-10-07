@@ -54,10 +54,20 @@
          is showing. -->
     <p class="rfs-label rfs-label-spaced">Time series</p>
     <div id="series-toggles" class="rfs-checks rfs-checks-grid"></div>
-    <label class="rfs-check rfs-check-wide">
-      <input type="checkbox" id="fill-gaps-toggle">
-      <span>Fill gaps in the record</span>
-    </label>
+    <!-- Radios rather than a select: three short choices fit on one row, and
+         all of them stay visible. main.js checks the configured one. -->
+    <p id="gap-fill-label" class="rfs-sublabel">Gap filling</p>
+    <div id="gap-fill-control" class="rfs-segmented" role="radiogroup" aria-labelledby="gap-fill-label">
+      <label title="Break the line at months with no GRACE data">
+        <input type="radio" name="gap-fill" value="none"><span>None</span>
+      </label>
+      <label title="Join the months either side of a gap with a straight line">
+        <input type="radio" name="gap-fill" value="line"><span>Straight line</span>
+      </label>
+      <label title="Fill gaps with a trend + seasonal model fitted to the observed months; filled months are marked">
+        <input type="radio" name="gap-fill" value="seasonal"><span>Seasonal model</span>
+      </label>
+    </div>
 
     <label class="rfs-label rfs-label-spaced" for="palette-select">Color ramp</label>
     <select id="palette-select" class="rfs-select"></select>
