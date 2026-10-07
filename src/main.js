@@ -679,16 +679,25 @@ const setRegionSet = async (set, {select = true} = {}) => {
   // the new set.
   clearAnalysis();
 
-  const index = arcgisMap.map?.layers?.indexOf(boundaryLayer) ?? -1;
-  const previous = boundaryLayer;
-  boundaryLayer = makeBoundaryLayer(set.file ? regionSetUrl(set.file) : null);
-  applyOutlineVisibility();
-  if (arcgisMap.map) {
-    arcgisMap.map.remove(previous);
-    // Back where it was, so the mascons and the anomaly raster keep their order.
-    if (index >= 0) arcgisMap.map.add(boundaryLayer, index);
-    else arcgisMap.map.add(boundaryLayer);
+  // My Regions keeps whatever boundary layer is already there instead of
+  // building one. It has no file, and a GeoJSONLayer with no URL fails its load
+  // the moment it is added to the map, logging two SDK errors on every visit to
+  // the set. Nothing reads the outgoing layer while My Regions is showing:
+  // applyOutlineVisibility hides it, ensureRegionRings and fitRegionSet branch
+  // on the set before touching it, and the view's click handler only hit-tests
+  // visible layers. The next published set replaces it as usual.
+  if (set.file) {
+    const index = arcgisMap.map?.layers?.indexOf(boundaryLayer) ?? -1;
+    const previous = boundaryLayer;
+    boundaryLayer = makeBoundaryLayer(regionSetUrl(set.file));
+    if (arcgisMap.map) {
+      arcgisMap.map.remove(previous);
+      // Back where it was, so the mascons and the anomaly raster keep their order.
+      if (index >= 0) arcgisMap.map.add(boundaryLayer, index);
+      else arcgisMap.map.add(boundaryLayer);
+    }
   }
+  applyOutlineVisibility();
 
   regionAttribution.textContent = set.attribution ?? "";
   regionAttribution.classList.toggle("hidden", !set.attribution);
@@ -1532,15 +1541,23 @@ const applyRegionFilter = () => {
     row.element.hidden = !match;
     if (match) shown++;
   }
-  const empty = regionList.querySelector(".rfs-list-empty");
-  if (shown === 0 && !empty) {
-    const p = document.createElement("p");
-    p.className = "rfs-list-empty";
-    p.textContent = "No regions match.";
-    regionList.append(p);
-  } else if (shown > 0) {
+  // An empty My Regions is a set with nothing in it yet, not a filter that
+  // missed, and "No regions match." read as the latter — with no hint that the
+  // set fills from the Upload button and the draw tool.
+  const message = !regionRows.length && !activeRegionSet.file
+    ? "No saved regions yet. Use Upload, or Draw a polygon on the map."
+    : shown === 0 ? "No regions match." : null;
+  let empty = regionList.querySelector(".rfs-list-empty");
+  if (!message) {
     empty?.remove();
+    return;
   }
+  if (!empty) {
+    empty = document.createElement("p");
+    empty.className = "rfs-list-empty";
+    regionList.append(empty);
+  }
+  empty.textContent = message;
 };
 
 // The native 3 degree GRACE mascon footprints (data/mascon_boundaries.py). This
@@ -1591,7 +1608,11 @@ const applyMasconVisibility = () => {
     masconLayerAdded = true;
     // Below the region outlines, which stay clickable on top, and above the
     // anomaly raster, which both views insert at index 0.
-    arcgisMap.map.add(masconLayer, arcgisMap.map.layers.indexOf(boundaryLayer));
+    // The boundary layer is not on the map when the manifest failed and My
+    // Regions is the only set (setRegionSet never adds one for it); on top then.
+    const index = arcgisMap.map.layers.indexOf(boundaryLayer);
+    if (index >= 0) arcgisMap.map.add(masconLayer, index);
+    else arcgisMap.map.add(masconLayer);
   }
   masconLayer.visible = displayConfig.showMascons;
 };
