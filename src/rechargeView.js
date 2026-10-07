@@ -339,6 +339,24 @@ const allowedRange = (state, rows, k, kind) => {
   return [prevPeak, peak - 1];
 };
 
+// A small inline mark matching how a thing is drawn on the editor chart, for
+// its legend and side panel.
+const swatchFor = (kind) => {
+  const sw = el("span", "rc-sw");
+  const svg = {
+    observed: `<svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="${COLOR.series}" stroke-width="2"/><circle cx="11" cy="5" r="3" fill="${COLOR.series}"/></svg>`,
+    filled: `<svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="${COLOR.filled}" stroke-width="2"/><circle cx="11" cy="5" r="3" fill="${COLOR.filled}"/></svg>`,
+    trough: `<svg width="14" height="12"><path d="M1 1 L13 1 L7 11 Z" fill="${COLOR.trough}"/></svg>`,
+    peak: `<svg width="14" height="12"><path d="M1 11 L13 11 L7 1 Z" fill="${COLOR.peak}"/></svg>`,
+    fitted: `<svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="${COLOR.recession}" stroke-width="3"/></svg>`,
+    extended: `<svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="${COLOR.recession}" stroke-width="2" stroke-dasharray="5 3"/></svg>`,
+    r1: `<svg width="10" height="14"><rect x="2" y="0" width="6" height="14" fill="${COLOR.r1}"/></svg>`,
+    r2: `<svg width="10" height="14"><rect x="2" y="0" width="6" height="14" fill="${COLOR.r2}"/></svg>`,
+  }[kind];
+  sw.innerHTML = svg;
+  return sw;
+};
+
 // One water year, zoomed in. Clicking a month on the curve offers to make it
 // the trough or the peak; the chart draws how S_B, S_P and S_L, and so R1 and
 // R2, come out of the picks.
@@ -376,7 +394,7 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
   nav.append(reset);
   node.append(nav);
   node.append(el("p", "rc-text rc-editor-help",
-    "To change a pick, click a month on the curve and choose whether it is this year's trough or peak. Use ◀ ▶ or the arrow keys to move between years."));
+    "To change a pick, drag the ▼ trough or ▲ peak along the curve, or step it a month at a time with its ‹ › buttons on the right. Use ◀ ▶ or the arrow keys to move between years."));
 
   const [pLo, pHi] = allowedRange(state, rows, k, "peak");
   const [tLo, tHi] = allowedRange(state, rows, k, "trough");
@@ -391,6 +409,23 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
     const edge = fill.isFilled[i] || fill.isFilled[i - 1] || fill.isFilled[i + 1];
     est.push({x: x(i), y: edge ? fill.filled[i] : null, i, f: fill.isFilled[i] === 1});
   }
+
+  // What every mark on the chart is, drawn with the same mark.
+  const legend = el("div", "rc-legend");
+  const key = (swatch, text) => {
+    const item = el("span", "rc-legend-item");
+    item.append(swatch, el("span", null, text));
+    legend.append(item);
+  };
+  key(swatchFor("observed"), "Observed month");
+  key(swatchFor("filled"), "Filled month (seasonal model)");
+  key(swatchFor("trough"), "Trough S_B");
+  key(swatchFor("peak"), "Peak S_P");
+  key(swatchFor("fitted"), "Recession line, fitted");
+  key(swatchFor("extended"), "extended to peak");
+  key(swatchFor("r1"), "R1");
+  key(swatchFor("r2"), "R2");
+  node.append(legend);
 
   const grid = el("div", "rc-editor-grid");
   const chartBox = el("div", "rc-canvas rc-canvas-editor");
@@ -462,51 +497,7 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
     },
   };
 
-  // The menu a click on a month opens.
-  const menu = el("div", "rc-pop hidden");
-  chartBox.append(menu);
   let chart = null;
-  // The hover tooltip would sit on top of the menu, so it is off while the menu is open.
-  const setTooltip = (on) => {
-    if (!chart) return;
-    chart.options.plugins.tooltip.enabled = on;
-    if (!on) chart.tooltip.setActiveElements([], {x: 0, y: 0});
-    chart.update("none");
-  };
-  const closeMenu = () => {
-    menu.classList.add("hidden");
-    setTooltip(true);
-  };
-  const openMenu = (i, px, py) => {
-    menu.replaceChildren();
-    menu.append(el("p", "rc-pop-title", `${when(i)} · ${fmt(fill.filled[i])} cm${fill.isFilled[i] ? " (filled month)" : ""}`));
-    const option = (kind, lo, hi, why) => {
-      const b = el("button", "rc-pop-btn", kind === "trough" ? "▼ Make this the trough" : "▲ Make this the peak");
-      b.type = "button";
-      const current = !row.error && row[kind] === i;
-      const allowed = i >= lo && i <= hi && !current;
-      b.disabled = !allowed;
-      if (current) b.title = `This is already the ${kind}`;
-      else if (!allowed) b.title = why;
-      b.addEventListener("click", () => {
-        closeMenu();
-        onPick(row.waterYear, kind, months[i]);
-      });
-      menu.append(b);
-      if (!allowed && !current) menu.append(el("p", "rc-pop-why", why));
-    };
-    option("trough", tLo, tHi, `The trough must fall between the previous peak (${when(tLo)}) and this year's peak.`);
-    option("peak", pLo, pHi, `The peak must fall within this water year (${when(pLo)} to ${when(pHi)}).`);
-    const cancel = el("button", "rc-pop-cancel", "Cancel");
-    cancel.type = "button";
-    cancel.addEventListener("click", closeMenu);
-    menu.append(cancel);
-    menu.classList.remove("hidden");
-    setTooltip(false);
-    const w = chartBox.clientWidth;
-    menu.style.left = `${Math.min(Math.max(px + 10, 0), w - 250)}px`;
-    menu.style.top = `${Math.max(py - 20, 0)}px`;
-  };
 
   chart = new Chart(canvas, {
     type: "line",
@@ -519,19 +510,6 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
       parsing: false,
       layout: {padding: {right: 60}},
       interaction: {mode: "nearest", intersect: false, axis: "x"},
-      onClick: (event, _, ch) => {
-        // The month nearest the click on the curve.
-        const t = ch.scales.x.getValueForPixel(event.x);
-        let best = null;
-        for (const p of est) if (p.y != null || Number.isFinite(values[p.i])) {
-          if (!best || Math.abs(p.x - t) < Math.abs(best.x - t)) best = p;
-        }
-        for (const p of obs) if (p.y != null && (!best || Math.abs(p.x - t) < Math.abs(best.x - t))) best = p;
-        if (best && Math.abs(best.x - t) < 20 * DAY && best.i >= start) openMenu(best.i, event.x, event.y);
-      },
-      onHover: (event, _, ch) => {
-        ch.canvas.style.cursor = "pointer";
-      },
       scales: {
         x: {type: "time", min: x(start) - 15 * DAY, max: barX2 ? Math.max(x(end), barX2 + 20 * DAY) : x(end),
           time: {unit: "month", tooltipFormat: "MMM yyyy", displayFormats: {month: "MMM yy"}},
@@ -543,30 +521,98 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
         legend: {display: false},
         tooltip: {
           filter: (item) => item.dataset.label === "GWSa" || (item.dataset.label === "Filled" && item.raw?.f),
-          callbacks: {label: (item) => `${item.dataset.label === "Filled" ? "Filled" : "Observed"}: ${item.parsed.y.toFixed(2)} cm (click to set as trough or peak)`},
+          callbacks: {label: (item) => `${item.dataset.label === "Filled" ? "Filled" : "Observed"}: ${item.parsed.y.toFixed(2)} cm`},
         },
       },
     },
   });
+
+  // Dragging the trough or peak marker: it follows the pointer along the curve,
+  // snapping to the months the method allows, and the year is recomputed on
+  // release.
+  const ranges = {trough: [tLo, tHi], peak: [pLo, pHi]};
+  const markerSet = (kind) => chart.data.datasets.find((d) => d.label === (kind === "trough" ? "Trough" : "Peak"));
+  const nearMarker = (px, py) => {
+    if (row.error) return null;
+    const {x: sx, y: sy} = chart.scales;
+    for (const kind of ["trough", "peak"]) {
+      const i = row[kind];
+      if (Math.hypot(sx.getPixelForValue(x(i)) - px, sy.getPixelForValue(fill.filled[i]) - py) < 16) return kind;
+    }
+    return null;
+  };
+  let drag = null;
+  canvas.style.touchAction = "none";
+  canvas.addEventListener("pointerdown", (e) => {
+    const kind = nearMarker(e.offsetX, e.offsetY);
+    if (!kind) return;
+    drag = {kind, i: row[kind]};
+    canvas.setPointerCapture(e.pointerId);
+    canvas.style.cursor = "grabbing";
+    chart.options.plugins.tooltip.enabled = false;
+  });
+  canvas.addEventListener("pointermove", (e) => {
+    if (!drag) {
+      canvas.style.cursor = nearMarker(e.offsetX, e.offsetY) ? "grab" : "default";
+      return;
+    }
+    const t = chart.scales.x.getValueForPixel(e.offsetX);
+    const [lo, hi] = ranges[drag.kind];
+    let best = lo;
+    for (let i = lo; i <= hi; i++) if (Math.abs(x(i) - t) < Math.abs(x(best) - t)) best = i;
+    if (best !== drag.i) {
+      drag.i = best;
+      markerSet(drag.kind).data = [{x: x(best), y: fill.filled[best]}];
+      chart.update("none");
+    }
+  });
+  const endDrag = () => {
+    if (!drag) return;
+    const {kind, i} = drag;
+    drag = null;
+    canvas.style.cursor = "default";
+    if (i !== row[kind]) onPick(row.waterYear, kind, months[i]);
+    else chart.options.plugins.tooltip.enabled = true;
+  };
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
 
   // Side panel: how this year's numbers come out.
   if (row.error) {
     side.append(el("p", "rc-editor-error", row.error));
   } else {
     const dl = el("dl", "rc-editor-values");
-    const item = (label, value, color) => {
-      const dt = el("dt", null, label);
-      if (color) dt.style.borderLeft = `4px solid ${color}`;
-      dl.append(dt, el("dd", null, value));
+    const item = (swatch, label, value, nudge) => {
+      const dt = el("dt");
+      dt.append(swatch, el("span", null, label));
+      const dd = el("dd");
+      if (nudge) dd.append(nudge);
+      dd.append(el("span", null, value));
+      dl.append(dt, dd);
     };
-    item(`▼ Trough S_B, ${when(row.trough)}`, `${fmt(row.sB)} cm`, COLOR.trough);
-    item(`▲ Peak S_P, ${when(row.peak)}`, `${fmt(row.sP)} cm`, COLOR.peak);
-    item("Recession line at peak, S_L", `${fmt(row.sL)} cm`, COLOR.recession);
-    item("R1 = S_P − S_B", `${fmt(row.r1)} cm`, COLOR.r1);
-    item("R2 = S_P − S_L", `${fmt(row.r2)} cm`, COLOR.r2);
+    // ‹ › step a pick one month, within the months the method allows.
+    const stepper = (kind) => {
+      const box = el("span", "rc-stepper");
+      const [lo, hi] = ranges[kind];
+      for (const dir of [-1, 1]) {
+        const b = el("button", "rc-step-btn", dir < 0 ? "‹" : "›");
+        b.type = "button";
+        const to = row[kind] + dir;
+        b.disabled = to < lo || to > hi;
+        b.title = `${kind === "trough" ? "Trough" : "Peak"} one month ${dir < 0 ? "earlier" : "later"}`;
+        b.addEventListener("click", () => onPick(row.waterYear, kind, months[to]));
+        box.append(b);
+      }
+      return box;
+    };
+    item(swatchFor("trough"), `Trough S_B, ${when(row.trough)}`, `${fmt(row.sB)} cm`, stepper("trough"));
+    item(swatchFor("peak"), `Peak S_P, ${when(row.peak)}`, `${fmt(row.sP)} cm`, stepper("peak"));
+    item(swatchFor("extended"), "Recession line at peak, S_L", `${fmt(row.sL)} cm`);
+    item(swatchFor("r1"), "R1 = S_P − S_B", `${fmt(row.r1)} cm`);
+    item(swatchFor("r2"), "R2 = S_P − S_L", `${fmt(row.r2)} cm`);
     if (areaKm2) {
-      item("R1 as volume", `${fmt(toKm3(row.r1, areaKm2), 2)} km³`);
-      item("R2 as volume", `${fmt(toKm3(row.r2, areaKm2), 2)} km³`);
+      item(el("span", "rc-sw"), "R1 as volume", `${fmt(toKm3(row.r1, areaKm2), 2)} km³`);
+      item(el("span", "rc-sw"), "R2 as volume", `${fmt(toKm3(row.r2, areaKm2), 2)} km³`);
     }
     side.append(dl);
     const {from} = row.recession;

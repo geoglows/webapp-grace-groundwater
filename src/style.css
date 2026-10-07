@@ -1357,7 +1357,7 @@ body.panel-resizing * {
 
 .rc-editor-grid {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 320px;
+    grid-template-columns: minmax(0, 1fr) 360px;
     gap: 16px;
 }
 
@@ -1385,7 +1385,6 @@ body.panel-resizing * {
 }
 
 .rc-editor-values dt {
-    padding-left: 8px;
     white-space: nowrap;
     color: var(--text-dim);
 }
@@ -1419,65 +1418,69 @@ body.panel-resizing * {
     font-size: 13px;
 }
 
-.rc-pop {
-    position: absolute;
-    z-index: 5;
-    width: 240px;
-    padding: 10px;
-    border: 1px solid var(--border);
-    border-radius: var(--r-md);
-    background: var(--surface);
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
-}
-
-.rc-pop.hidden {
-    display: none;
-}
-
-.rc-pop-title {
+.rc-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 16px;
     margin: 0 0 8px;
-    font-size: 13px;
-    font-weight: 700;
+    font-size: 12.5px;
+    color: var(--text-dim);
 }
 
-.rc-pop-btn,
-.rc-pop-cancel {
-    display: block;
-    width: 100%;
-    margin-top: 6px;
-    padding: 6px 10px;
+.rc-legend-item,
+.rc-editor-values dt {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.rc-sw {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 22px;
+}
+
+.rc-editor-values dd {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.rc-stepper {
+    display: inline-flex;
     border: 1px solid var(--border);
     border-radius: var(--r-sm);
+    overflow: hidden;
+}
+
+.rc-step-btn {
+    width: 24px;
+    height: 22px;
+    border: none;
     background: var(--surface2);
     color: var(--text);
     font: inherit;
-    font-size: 13px;
-    text-align: left;
+    font-size: 15px;
+    line-height: 1;
     cursor: pointer;
 }
 
-.rc-pop-btn:not(:disabled):hover {
-    border-color: var(--accent);
+.rc-step-btn + .rc-step-btn {
+    border-left: 1px solid var(--border);
 }
 
-.rc-pop-btn:disabled {
-    opacity: 0.45;
+.rc-step-btn:disabled {
+    opacity: 0.35;
     cursor: default;
-}
-
-.rc-pop-cancel {
-    background: transparent;
-    text-align: center;
-    color: var(--text-faint);
-}
-
-.rc-pop-why {
-    margin: 2px 2px 0;
-    color: var(--text-faint);
-    font-size: 11.5px;
-    line-height: 1.35;
 }
 
 .rc-editor-notes {
     color: var(--text-dim);
+}
+
+.rc-editor-values dd > span:last-child {
+    min-width: 74px;
+    text-align: right;
 }
