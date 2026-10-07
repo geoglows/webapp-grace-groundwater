@@ -259,6 +259,25 @@ const picksChart = (canvas, state, rows, selectedRow, onSelectYear) => {
   });
 };
 
+// Legend marker for a dashed line: Chart.js draws a line dataset's legend
+// entry as a box with a dashed outline, which reads as a bar.
+const dashedLineMarker = (color) => {
+  // Chart.js draws an image point style at the canvas's own width and height,
+  // so the canvas is sized in CSS pixels.
+  const el = document.createElement("canvas");
+  el.width = 24;
+  el.height = 8;
+  const ctx = el.getContext("2d");
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.setLineDash([5, 3]);
+  ctx.beginPath();
+  ctx.moveTo(0, 4);
+  ctx.lineTo(24, 4);
+  ctx.stroke();
+  return el;
+};
+
 // R1 and R2 by water year, side by side, with each one's mean as a line.
 const rechargeChart = (canvas, rows) => {
   const c = axisColors();
@@ -272,10 +291,10 @@ const rechargeChart = (canvas, rows) => {
     data: {
       labels,
       datasets: [
-        {label: "R1, lower estimate (cm/yr)", data: r1, backgroundColor: COLOR.r1, borderRadius: 2, order: 2},
-        {label: "R2, upper estimate (cm/yr)", data: r2, backgroundColor: `${COLOR.r2}b0`, borderRadius: 2, order: 2},
-        {type: "line", label: `Mean R1, ${fmt(m1)} cm/yr`, data: labels.map(() => m1), borderColor: COLOR.r1, borderDash: [6, 4], borderWidth: 1.5, pointRadius: 0, order: 1},
-        {type: "line", label: `Mean R2, ${fmt(m2)} cm/yr`, data: labels.map(() => m2), borderColor: COLOR.r2, borderDash: [6, 4], borderWidth: 1.5, pointRadius: 0, order: 1},
+        {label: "R1, lower estimate (cm/yr)", data: r1, backgroundColor: COLOR.r1, borderRadius: 2, pointStyle: "rect", order: 2},
+        {label: "R2, upper estimate (cm/yr)", data: r2, backgroundColor: `${COLOR.r2}b0`, borderRadius: 2, pointStyle: "rect", order: 2},
+        {type: "line", label: `Mean R1, ${fmt(m1)} cm/yr`, data: labels.map(() => m1), borderColor: COLOR.r1, borderDash: [6, 4], borderWidth: 1.5, pointRadius: 0, pointStyle: dashedLineMarker(COLOR.r1), order: 1},
+        {type: "line", label: `Mean R2, ${fmt(m2)} cm/yr`, data: labels.map(() => m2), borderColor: COLOR.r2, borderDash: [6, 4], borderWidth: 1.5, pointRadius: 0, pointStyle: dashedLineMarker(COLOR.r2), order: 1},
       ],
     },
     options: {
@@ -287,7 +306,7 @@ const rechargeChart = (canvas, rows) => {
         y: {beginAtZero: true, title: {display: true, text: "Recharge (cm/yr)", color: c.text}, ticks: {color: c.text}, grid: {color: c.grid}},
       },
       plugins: {
-        legend: {position: "bottom", labels: {color: c.text, boxWidth: 14, sort: (a, b) => a.datasetIndex - b.datasetIndex}},
+        legend: {position: "bottom", labels: {color: c.text, usePointStyle: true, pointStyleWidth: 24, sort: (a, b) => a.datasetIndex - b.datasetIndex}},
         tooltip: {callbacks: {label: (item) => `${item.dataset.label.replace(/ \(cm\/yr\)$/, "")}: ${fmt(item.parsed.y)} cm/yr`}},
       },
     },
