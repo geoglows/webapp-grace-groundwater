@@ -522,7 +522,9 @@ const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
         x: {type: "time", min: x(start) - 15 * DAY, max: barX2 ? Math.max(x(end), barX2 + 20 * DAY) : x(end),
           time: {unit: "month", tooltipFormat: "MMM yyyy", displayFormats: {month: "MMM yy"}},
           ticks: {color: c.text, maxRotation: 0, autoSkip: true}, grid: {color: c.grid}},
-        y: {title: {display: true, text: "GWSa (cm)", color: c.text}, ticks: {color: c.text},
+        // Headroom above and below, so S_P and S_L and their labels never sit
+        // on the edge of the plot.
+        y: {grace: "10%", title: {display: true, text: "GWSa (cm)", color: c.text}, ticks: {color: c.text},
           grid: {color: (ctx) => (ctx.tick?.value === 0 ? c.axis : c.grid)}},
       },
       plugins: {
