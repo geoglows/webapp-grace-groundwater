@@ -168,7 +168,7 @@ const notesFor = (row) => {
 
 // The series with each year's trough, peak and recession line. Observed months
 // solid, filled months red, so a pick on an estimated month is visible.
-const picksChart = (canvas, state, rows) => {
+const picksChart = (canvas, state, rows, selectedRow, onSelectYear) => {
   const {dates, values, fill} = state;
   const x = (i) => dates[i].getTime();
   const observed = [];
@@ -187,8 +187,26 @@ const picksChart = (canvas, state, rows) => {
     lines.push({x: x(r.recession.from), y: r.recession.y0}, {x: x(r.recession.to), y: r.recession.y1}, {x: x(r.recession.to), y: null});
   }
   const c = axisColors();
+  // The selected water year, shaded behind the data.
+  const band = selectedRow
+    ? {from: x(selectedRow.yearFirst) - 15 * 864e5, to: x(Math.min(selectedRow.yearFirst + 11, dates.length - 1)) + 15 * 864e5}
+    : null;
+  const shade = token("--accent", "#38bdf8");
   return new Chart(canvas, {
     type: "line",
+    plugins: [{
+      id: "selectedYear",
+      beforeDatasetsDraw(chart) {
+        if (!band) return;
+        const {ctx, chartArea: {top, bottom}, scales: {x: sx}} = chart;
+        const x0 = sx.getPixelForValue(band.from);
+        const x1 = sx.getPixelForValue(band.to);
+        ctx.save();
+        ctx.fillStyle = `${shade}22`;
+        ctx.fillRect(x0, top, x1 - x0, bottom - top);
+        ctx.restore();
+      },
+    }],
     data: {
       datasets: [
         {label: "GWSa", data: observed, borderColor: COLOR.series, borderWidth: 1.6, pointRadius: 0, pointStyle: "line", spanGaps: false, order: 3},
@@ -204,6 +222,20 @@ const picksChart = (canvas, state, rows) => {
       animation: false,
       parsing: false,
       interaction: {mode: "nearest", intersect: true},
+      // Clicking anywhere in a water year opens it in the year editor below.
+      onClick: (event, _, chart) => {
+        const t = chart.scales.x.getValueForPixel(event.x);
+        let best = null;
+        for (const r of rows) {
+          const a = x(r.yearFirst);
+          const b = x(Math.min(r.yearFirst + 11, dates.length - 1));
+          if (t >= a - 15 * 864e5 && t <= b + 15 * 864e5) best = r;
+        }
+        if (best) onSelectYear(best.waterYear);
+      },
+      onHover: (event, _, chart) => {
+        chart.canvas.style.cursor = "pointer";
+      },
       scales: {
         x: {type: "time", time: {unit: "year", tooltipFormat: "MMM yyyy"}, ticks: {color: c.text, maxRotation: 0}, grid: {color: c.grid}},
         y: {
@@ -295,35 +327,177 @@ const download = (text, filename) => {
 
 const slug = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "") || "region";
 
-// A month picker for one pick of one year: every month the method allows for
-// it, plus "auto" to drop the override.
-const pickSelect = (state, row, kind, rows, k, onChange) => {
-  const {months} = state;
-  const select = el("select", "rc-pick");
-  select.setAttribute("aria-label", `${kind} for water year ${row.waterYear}`);
-  const auto = el("option", null, "auto");
-  auto.value = "";
-  select.append(auto);
-  // The peak may be any month of its water year; the trough any month from the
-  // previous peak up to the peak. Offering a wider range would only invite the
-  // errors waterTableFluctuation() reports.
+// The months a pick may move to: a peak anywhere in its water year after the
+// previous peak, a trough from the previous peak up to the month before the
+// peak. Wider choices would only produce the errors waterTableFluctuation()
+// reports.
+const allowedRange = (state, rows, k, kind) => {
+  const row = rows[k];
   const prevPeak = rows.slice(0, k).reverse().find((r) => !r.error)?.peak ?? state.first;
-  const peak = row.error ? null : row.peak;
-  const from = kind === "peak" ? row.yearFirst : prevPeak;
-  const to = kind === "peak" ? row.yearFirst + 11 : (peak ?? row.yearFirst + 11) - 1;
-  for (let i = from; i <= to; i++) {
-    const o = el("option", null, monthLabel(months[i]) + (state.fill.isFilled[i] ? " (filled)" : ""));
-    o.value = String(months[i]);
-    select.append(o);
+  if (kind === "peak") return [Math.max(row.yearFirst, prevPeak + 1), Math.min(row.yearFirst + 11, state.dates.length - 1)];
+  const peak = row.error ? row.yearFirst + 11 : row.peak;
+  return [prevPeak, peak - 1];
+};
+
+// One water year, zoomed in, where the trough and peak are moved by clicking.
+const yearEditor = (state, rows, k, {onSelect, onPick, onReset}) => {
+  const {dates, months, values, fill, areaKm2} = state;
+  const row = rows[k];
+  const x = (i) => dates[i].getTime();
+  const node = el("div", "rc-editor");
+
+  // Header: previous / this year / next.
+  const nav = el("div", "rc-editor-nav");
+  const prev = el("button", "rc-button rc-nav-btn", "◀");
+  prev.type = "button";
+  prev.title = "Previous water year (←)";
+  prev.disabled = k === 0;
+  prev.addEventListener("click", () => onSelect(rows[k - 1].waterYear));
+  const next = el("button", "rc-button rc-nav-btn", "▶");
+  next.type = "button";
+  next.title = "Next water year (→)";
+  next.disabled = k === rows.length - 1;
+  next.addEventListener("click", () => onSelect(rows[k + 1].waterYear));
+  const last = Math.min(row.yearFirst + 11, dates.length - 1);
+  const title = el("div", "rc-editor-title");
+  title.append(el("span", "rc-editor-year", `Water year ${row.waterYear}`),
+    el("span", "rc-editor-range", `${monthLabel(months[row.yearFirst])} to ${monthLabel(months[last])} · ${k + 1} of ${rows.length}`));
+  nav.append(prev, title, next);
+
+  const mode = el("div", "rc-segmented");
+  mode.setAttribute("role", "radiogroup");
+  mode.setAttribute("aria-label", "Pick to move");
+  for (const kind of ["trough", "peak"]) {
+    const b = el("button", `rc-seg${state.editMode === kind ? " rc-seg-on" : ""}`, kind === "trough" ? "▼ Move trough" : "▲ Move peak");
+    b.type = "button";
+    b.setAttribute("aria-pressed", String(state.editMode === kind));
+    b.addEventListener("click", () => {
+      state.editMode = kind;
+      onSelect(row.waterYear);
+    });
+    mode.append(b);
   }
-  const current = state.overrides[row.waterYear]?.[kind];
-  select.value = current != null ? String(current) : "";
-  if (current == null && !row.error) {
-    // Show the automatic pick in the closed control without making it an override.
-    auto.textContent = `${monthLabel(months[row[kind]])} (auto)`;
+  nav.append(mode);
+  node.append(nav);
+
+  // Zoomed chart: from a little before the recession starts to a little after
+  // the water year ends.
+  const [lo, hi] = allowedRange(state, rows, k, state.editMode);
+  const start = Math.max(state.first, Math.min(row.error ? row.yearFirst : row.recession.from, lo, row.yearFirst) - 2);
+  const end = Math.min(dates.length - 1, row.yearFirst + 13);
+  const obs = [];
+  const est = [];
+  for (let i = start; i <= end; i++) {
+    if (!Number.isFinite(fill.filled[i])) continue;
+    obs.push({x: x(i), y: Number.isFinite(values[i]) ? values[i] : null});
+    const edge = fill.isFilled[i] || fill.isFilled[i - 1] || fill.isFilled[i + 1];
+    est.push({x: x(i), y: edge ? fill.filled[i] : null, f: fill.isFilled[i] === 1});
   }
-  select.addEventListener("change", () => onChange(row.waterYear, kind, select.value === "" ? null : Number(select.value)));
-  return select;
+  const allowed = [];
+  for (let i = lo; i <= hi; i++) allowed.push({x: x(i), y: fill.filled[i], i});
+
+  const grid = el("div", "rc-editor-grid");
+  const chartBox = el("div", "rc-canvas rc-canvas-editor");
+  const canvas = el("canvas");
+  chartBox.append(canvas);
+  const side = el("div", "rc-editor-side");
+  grid.append(chartBox, side);
+  node.append(grid);
+  node.append(el("p", "rc-stat-note",
+    `Click a circled month to move the ${state.editMode} there. Months in red are filled by the seasonal model rather than observed.`));
+
+  const c = axisColors();
+  const datasets = [
+    {label: "Allowed", data: allowed, showLine: false, pointRadius: 7, pointHoverRadius: 9, pointHitRadius: 10,
+      pointBackgroundColor: "transparent", pointBorderColor: state.editMode === "peak" ? COLOR.peak : COLOR.trough,
+      pointBorderWidth: 1.5, order: 4},
+    {label: "GWSa", data: obs, borderColor: COLOR.series, borderWidth: 2, pointRadius: 2.5, pointBackgroundColor: COLOR.series, spanGaps: false, order: 3},
+    {label: "Filled", data: est, borderColor: COLOR.filled, borderWidth: 2, pointRadius: (ctx) => (ctx.raw?.f ? 2.5 : 0),
+      pointBackgroundColor: COLOR.filled, spanGaps: false, order: 2},
+  ];
+  if (!row.error) {
+    const peakX = x(row.peak);
+    const dx = 8 * 864e5;
+    datasets.push(
+      {label: "Recession line", data: [{x: x(row.recession.from), y: row.recession.y0}, {x: x(row.recession.to), y: row.recession.y1}],
+        borderColor: COLOR.recession, borderWidth: 1.6, borderDash: [5, 3], pointRadius: 0, order: 1},
+      {label: "R1", data: [{x: peakX + dx, y: row.sB}, {x: peakX + dx, y: row.sP}], borderColor: COLOR.r1, borderWidth: 4, pointRadius: 0, order: 1},
+      {label: "R2", data: [{x: peakX + 3 * dx, y: row.sL}, {x: peakX + 3 * dx, y: row.sP}], borderColor: COLOR.r2, borderWidth: 4, pointRadius: 0, order: 1},
+      {label: "Trough", data: [{x: x(row.trough), y: row.sB}], showLine: false, pointStyle: "triangle", rotation: 180, pointRadius: 9,
+        pointBackgroundColor: COLOR.trough, pointBorderColor: COLOR.trough, order: 0},
+      {label: "Peak", data: [{x: peakX, y: row.sP}], showLine: false, pointStyle: "triangle", pointRadius: 9,
+        pointBackgroundColor: COLOR.peak, pointBorderColor: COLOR.peak, order: 0},
+    );
+  }
+  const chart = new Chart(canvas, {
+    type: "line",
+    data: {datasets},
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      animation: false,
+      parsing: false,
+      interaction: {mode: "nearest", intersect: true},
+      onClick: (event, _, ch) => {
+        // The allowed month nearest the click, whether or not a circle was hit.
+        const t = ch.scales.x.getValueForPixel(event.x);
+        let best = null;
+        for (const p of allowed) if (!best || Math.abs(p.x - t) < Math.abs(best.x - t)) best = p;
+        if (best && Math.abs(best.x - t) < 20 * 864e5) onPick(row.waterYear, state.editMode, months[best.i]);
+      },
+      onHover: (event, _, ch) => {
+        ch.canvas.style.cursor = "pointer";
+      },
+      scales: {
+        x: {type: "time", time: {unit: "month", tooltipFormat: "MMM yyyy", displayFormats: {month: "MMM yy"}},
+          ticks: {color: c.text, maxRotation: 0, autoSkip: true}, grid: {color: c.grid}},
+        y: {title: {display: true, text: "GWSa (cm)", color: c.text}, ticks: {color: c.text},
+          grid: {color: (ctx) => (ctx.tick?.value === 0 ? c.axis : c.grid)}},
+      },
+      plugins: {
+        legend: {display: false},
+        tooltip: {
+          filter: (item) => item.dataset.label !== "Allowed" && item.dataset.label !== "Recession line",
+          callbacks: {
+            label: (item) => {
+              const l = item.dataset.label;
+              if (l === "R1") return `R1 = S_P − S_B = ${fmt(row.r1)} cm`;
+              if (l === "R2") return `R2 = S_P − S_L = ${fmt(row.r2)} cm`;
+              return `${l}: ${item.parsed.y.toFixed(2)} cm`;
+            },
+          },
+        },
+      },
+    },
+  });
+
+  // Side panel: this year's numbers.
+  if (row.error) {
+    side.append(el("p", "rc-editor-error", row.error));
+  } else {
+    const dl = el("dl", "rc-editor-values");
+    const item = (label, value, color) => {
+      const dt = el("dt", null, label);
+      if (color) dt.style.borderLeft = `4px solid ${color}`;
+      dl.append(dt, el("dd", null, value));
+    };
+    const when = (i) => dates[i].toLocaleDateString("en-US", {month: "short", year: "numeric"});
+    item(`Trough S_B (${when(row.trough)})`, `${fmt(row.sB)} cm`, COLOR.trough);
+    item(`Peak S_P (${when(row.peak)})`, `${fmt(row.sP)} cm`, COLOR.peak);
+    item("Recession S_L at peak", `${fmt(row.sL)} cm`, COLOR.recession);
+    item("R1 (lower)", `${fmt(row.r1)} cm${areaKm2 ? ` · ${fmt(toKm3(row.r1, areaKm2), 2)} km³` : ""}`, COLOR.r1);
+    item("R2 (upper)", `${fmt(row.r2)} cm${areaKm2 ? ` · ${fmt(toKm3(row.r2, areaKm2), 2)} km³` : ""}`, COLOR.r2);
+    side.append(dl);
+  }
+  const notes = notesFor(row);
+  if (notes && !row.error) side.append(el("p", "rc-stat-note", notes));
+  const reset = el("button", "rc-button", "Reset this year");
+  reset.type = "button";
+  reset.disabled = !row.overridden.length;
+  reset.addEventListener("click", () => onReset(row.waterYear));
+  side.append(reset);
+
+  return {node, chart};
 };
 
 const analysisSection = (state, rerender) => {
@@ -342,7 +516,7 @@ const analysisSection = (state, rerender) => {
   intro.innerHTML =
     "For each water year the method takes the <b>peak</b> (S<sub>P</sub>, the highest month after removing the long-term trend), " +
     "the <b>trough</b> before it (S<sub>B</sub>), and a <b>recession line</b> fitted to the decline from the previous peak to the " +
-    "trough and extended to the peak month (S<sub>L</sub>). Check the picks below; if one lands on a noisy spike, change it in the table.";
+    "trough and extended to the peak month (S<sub>L</sub>). Check each year in the editor below the chart; if a pick lands on a noisy spike, move it.";
   s2.append(intro);
 
   const controls = el("div", "rc-controls");
@@ -376,14 +550,42 @@ const analysisSection = (state, rerender) => {
   controls.append(resetAll);
   s2.append(controls);
 
+  if (!rows.some((r) => r.waterYear === state.selectedYear)) state.selectedYear = rows[0]?.waterYear ?? null;
+  const k = rows.findIndex((r) => r.waterYear === state.selectedYear);
+  const selectYear = (year, {scroll = false} = {}) => {
+    state.selectedYear = year;
+    state.scrollToEditor = scroll;
+    rerender();
+  };
+  const onPick = (year, kind, month) => {
+    const picks = {...(state.overrides[year] ?? {})};
+    picks[kind] = month;
+    state.overrides[year] = picks;
+    rerender();
+  };
+  const onReset = (year) => {
+    delete state.overrides[year];
+    rerender();
+  };
+  state.step = (dir) => {
+    const j = k + dir;
+    if (j >= 0 && j < rows.length) selectYear(rows[j].waterYear);
+  };
+
   const box = el("div", "rc-chart-box");
   const canvasBox = el("div", "rc-canvas rc-canvas-tall");
   const canvas = el("canvas");
   canvasBox.append(canvas);
-  box.append(canvasBox);
+  box.append(canvasBox, el("p", "rc-stat-note", "Click a year in the chart to open it in the editor below. The shaded band is the selected water year."));
   s2.append(box);
+  charts.push(picksChart(canvas, state, rows, rows[k], (y) => selectYear(y)));
+  if (k >= 0) {
+    const editor = yearEditor(state, rows, k, {onSelect: (y) => selectYear(y), onPick, onReset});
+    s2.append(editor.node);
+    charts.push(editor.chart);
+    state.editorNode = editor.node;
+  }
   wrap.append(s2);
-  charts.push(picksChart(canvas, state, rows));
 
   // ---- 3. Recharge
   const s3 = el("section", "rc-section");
@@ -429,22 +631,14 @@ const analysisSection = (state, rerender) => {
   const thead = el("thead");
   thead.append(head);
   const tbody = el("tbody");
-  const onPick = (year, kind, month) => {
-    const picks = {...(state.overrides[year] ?? {})};
-    if (month == null) delete picks[kind];
-    else picks[kind] = month;
-    if (Object.keys(picks).length) state.overrides[year] = picks;
-    else delete state.overrides[year];
-    rerender();
-  };
-  rows.forEach((r, k) => {
-    const tr = el("tr", r.error ? "rc-row-error" : r.overridden.length ? "rc-row-edited" : "");
+  rows.forEach((r) => {
+    const cls = [r.error ? "rc-row-error" : r.overridden.length ? "rc-row-edited" : "", r.waterYear === state.selectedYear ? "rc-row-selected" : ""];
+    const tr = el("tr", cls.join(" ").trim());
+    tr.title = "Open this year in the editor";
+    tr.addEventListener("click", () => selectYear(r.waterYear, {scroll: true}));
     tr.append(el("td", null, String(r.waterYear)));
-    const tdT = el("td");
-    tdT.append(pickSelect(state, r, "trough", rows, k, onPick));
-    const tdP = el("td");
-    tdP.append(pickSelect(state, r, "peak", rows, k, onPick));
-    tr.append(tdT, tdP);
+    tr.append(el("td", null, r.error ? "" : monthLabel(months[r.trough]) + (r.overridden.includes("trough") ? " ✎" : "")));
+    tr.append(el("td", null, r.error ? "" : monthLabel(months[r.peak]) + (r.overridden.includes("peak") ? " ✎" : "")));
     for (const v of [r.sB, r.sP, r.sL, r.r1, r.r2]) tr.append(el("td", "rc-num", fmt(v)));
     if (areaKm2) for (const v of [r.r1, r.r2]) tr.append(el("td", "rc-num", fmt(toKm3(v, areaKm2), 3)));
     tr.append(el("td", "rc-notes", notesFor(r)));
@@ -503,6 +697,7 @@ export function openRechargeView({name, dates, values, uncertainty = null, areaK
 
   const body = el("main", "rc-body");
   const charts = [];
+  let stepYear = () => {};
   if (!fill) {
     body.append(el("p", "rc-empty",
       "This series is too short or has too few observations in some calendar months to fit the seasonal model, so recharge can't be estimated."));
@@ -516,7 +711,9 @@ export function openRechargeView({name, dates, values, uncertainty = null, areaK
     // year start changes; the check itself does not depend on either.
     let first = 0;
     while (!Number.isFinite(fill.trend[first])) first++;
-    const state = {name, dates, months, values, fill, areaKm2, first, startMonth: s.troughMonth, startMonthChoice: null, overrides: {}};
+    const state = {name, dates, months, values, fill, areaKm2, first, startMonth: s.troughMonth, startMonthChoice: null, overrides: {},
+      selectedYear: null, editMode: "trough"};
+    stepYear = (dir) => state.step?.(dir);
     const holder = el("div");
     body.append(holder);
     let current = null;
@@ -526,6 +723,10 @@ export function openRechargeView({name, dates, values, uncertainty = null, areaK
       current = analysisSection(state, rerender);
       holder.replaceChildren(current.node);
       body.scrollTop = scroll;
+      if (state.scrollToEditor && state.editorNode) {
+        state.editorNode.scrollIntoView({block: "center"});
+        state.scrollToEditor = false;
+      }
     };
     rerender();
     charts.push({destroy: () => current?.charts.forEach((c) => c.destroy())});
@@ -537,6 +738,12 @@ export function openRechargeView({name, dates, values, uncertainty = null, areaK
 
   const onKey = (e) => {
     if (e.key === "Escape") closeRechargeView();
+    // ← and → step through the water years, unless a control has the keys.
+    const typing = /^(SELECT|INPUT|TEXTAREA)$/.test(document.activeElement?.tagName ?? "");
+    if (!typing && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      e.preventDefault();
+      stepYear(e.key === "ArrowLeft" ? -1 : 1);
+    }
   };
   document.addEventListener("keydown", onKey);
   open = {root, charts, onKey, areaKm2};

@@ -1289,3 +1289,126 @@ body.panel-resizing * {
     font-weight: 700;
     border-bottom: none;
 }
+
+.rc-editor {
+    margin-top: 4px;
+    padding: 14px 16px;
+    border: 1px solid var(--accent);
+    border-radius: var(--r-lg);
+    background: var(--surface);
+}
+
+.rc-editor-nav {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+}
+
+.rc-nav-btn {
+    min-width: 40px;
+    font-size: 15px;
+}
+
+.rc-editor-title {
+    display: flex;
+    flex-direction: column;
+    min-width: 200px;
+}
+
+.rc-editor-year {
+    font-size: 17px;
+    font-weight: 700;
+}
+
+.rc-editor-range {
+    color: var(--text-faint);
+    font-size: 12.5px;
+}
+
+.rc-segmented {
+    display: inline-flex;
+    margin-left: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    overflow: hidden;
+}
+
+.rc-seg {
+    padding: 6px 14px;
+    border: none;
+    background: var(--surface2);
+    color: var(--text-dim);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.rc-seg + .rc-seg {
+    border-left: 1px solid var(--border);
+}
+
+.rc-seg-on {
+    background: var(--accent);
+    color: var(--on-accent);
+    font-weight: 600;
+}
+
+.rc-editor-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    gap: 16px;
+}
+
+@media (max-width: 900px) {
+    .rc-editor-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+.rc-canvas-editor {
+    height: 340px;
+}
+
+.rc-editor-side {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.rc-editor-values {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 6px 10px;
+    margin: 0;
+    font-size: 13px;
+}
+
+.rc-editor-values dt {
+    padding-left: 8px;
+    white-space: nowrap;
+    color: var(--text-dim);
+}
+
+.rc-editor-values dd {
+    margin: 0;
+    font-weight: 700;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.rc-editor-error {
+    color: #ef4444;
+    font-size: 13px;
+}
+
+.rc-table tbody tr {
+    cursor: pointer;
+}
+
+.rc-table tbody tr:hover td {
+    background: var(--surface2);
+}
+
+.rc-row-selected td {
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
