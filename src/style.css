@@ -1149,3 +1149,143 @@ body.panel-resizing * {
     color: var(--accent);
     font-weight: 600;
 }
+
+.rc-text {
+    margin: 0 0 14px;
+    color: var(--text-dim);
+    font-size: 14px;
+    line-height: 1.55;
+}
+
+.rc-caution {
+    margin-top: 16px;
+    padding: 12px 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface);
+}
+
+.rc-controls {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    margin: 0 0 12px;
+}
+
+.rc-control-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--text-dim);
+}
+
+.rc-pick {
+    padding: 3px 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+}
+
+.rc-button {
+    padding: 5px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface2);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.rc-button:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.rc-button-primary {
+    border-color: var(--accent);
+    background: var(--accent);
+    color: var(--on-accent);
+    font-weight: 600;
+}
+
+.rc-chart-box {
+    margin-bottom: 16px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface);
+}
+
+.rc-chart-box .rc-canvas {
+    height: 320px;
+}
+
+.rc-chart-box .rc-canvas-tall {
+    height: 420px;
+}
+
+.rc-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.rc-table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    background: var(--surface);
+}
+
+.rc-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.rc-table th,
+.rc-table td {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    white-space: nowrap;
+}
+
+.rc-table th {
+    position: sticky;
+    top: 0;
+    background: var(--surface2);
+    color: var(--text-faint);
+    font-weight: 600;
+}
+
+.rc-table .rc-num {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.rc-table .rc-notes {
+    white-space: normal;
+    min-width: 220px;
+    color: var(--text-faint);
+}
+
+.rc-row-edited td:first-child {
+    box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.rc-row-error td {
+    color: #ef4444;
+}
+
+.rc-row-mean td {
+    font-weight: 700;
+    border-bottom: none;
+}

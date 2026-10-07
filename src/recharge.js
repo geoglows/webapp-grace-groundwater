@@ -150,12 +150,15 @@ export function waterTableFluctuation(fill, months, startMonth, overrides = {}) 
     const line = lineFit(series, fitStart, trough);
     let slope;
     let sL;
+    let recession; // the line as drawn: {from, to, y0, y1}, array positions and cm
     if (!line || line.slope >= 0) {
       slope = line ? line.slope : NaN;
       sL = sB;
+      recession = {from: trough, to: peak, y0: sB, y1: sB};
     } else {
       slope = line.slope;
       sL = line.intercept + slope * (peak - fitStart);
+      recession = {from: fitStart, to: peak, y0: line.intercept, y1: sL};
     }
 
     const fittedSpan = trough - fitStart;
@@ -182,6 +185,7 @@ export function waterTableFluctuation(fill, months, startMonth, overrides = {}) 
       sB,
       sL,
       recessionSlope: 12 * slope, // cm/yr
+      recession,
       rS,
       rD,
       r1: rS,
