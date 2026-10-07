@@ -431,9 +431,16 @@ export function renderTimeseriesChart({
         legend: {
           display: multiple || hasFilled || series.some((s) => s.trendPoints),
           position: "bottom",
-          labels: {color: axisText, boxWidth: 12, boxHeight: 2, font: {size: 11}},
-          // The band's two datasets have no meaning of their own to show.
-          filter: (item) => item.datasetIndex >= lineStart,
+          labels: {
+            color: axisText,
+            boxWidth: 12,
+            boxHeight: 2,
+            font: {size: 11},
+            // The band's two datasets have no meaning of their own to show.
+            // Chart.js reads this from legend.labels; one level up, where it
+            // used to sit, it was ignored and both band entries were listed.
+            filter: (item) => item.datasetIndex >= lineStart,
+          },
         },
         tooltip: {
           // Only the data lines carry a reading at a month: the band's two
