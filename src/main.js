@@ -338,10 +338,6 @@ const syncSeriesToggles = () => {
   }
 };
 
-// Which of the two resolutions the app is currently reading. Every zarr read,
-// every IndexedDB cache key, and every derived quantity (cell size, the raster's
-// georeferencing) follows this, so the 1.0 and 0.5 degree stores never mix —
-// and switching back to one already loaded costs nothing but a cache hit.
 // Two frames: one for the browser to lay out the chart panel that exitGlobalView
 // just revealed, one for the view's resize observer to pick up its new size.
 const afterLayout = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));

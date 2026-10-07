@@ -172,7 +172,7 @@ if __name__ == "__main__":
         print(f"[GRACE] Coarsening from {GRACE_RESOLUTION} to {target_resolution} degree (factor {grace_factor})")
         grace = grace.coarsen({'lat': grace_factor, 'lon': grace_factor}, boundary='trim').mean()
 
-    # NOAH 0.25 coarsened to 0.5 is the objective since GRACE doesn't cover all latitudes covered by a GLDAS product
+    # NOAH 0.25 is coarsened to the 1.0 degree target to match VIC and CLSM
     gldas_noah = (
         GldasNoah(files=gldas_noah_files)
         .prepare_dataset(resolution=target_resolution)
