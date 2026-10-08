@@ -235,8 +235,15 @@ if __name__ == "__main__":
     ds['TWSa'] = ds['TWSa'].round(0)
     ds['GWSa'] = ds['GWSa'].round(0)
     ds['SWEa'] = ds['SWEa'].round(0)
-    ds['CANa'] = ds['CANa'].round(0)
     ds['SMa'] = ds['SMa'].round(0)
+    # CANa is the exception, and rounding it to whole cm made it identically
+    # zero everywhere. GLDAS CanopInt_inst spans 0 to 0.5 kg/m2 (NASA's own
+    # documented range), which this pipeline divides by 10 into 0 to 0.05 cm, so
+    # the whole variable is smaller than one rounding step and an anomaly is a
+    # fraction of that. Its model spread, CANa_unc, sits at 0.001 to 0.03 cm and
+    # survived only because it was rounded to 4 decimals. CANa gets the same
+    # treatment, and float32 with it: the int16 dtype below stores whole cm.
+    ds['CANa'] = ds['CANa'].round(4)
     ds['TWSa_unc'] = ds['TWSa_unc'].round(4)
     ds['GWSa_unc'] = ds['GWSa_unc'].round(4)
     ds['SWEa_unc'] = ds['SWEa_unc'].round(4)
@@ -288,7 +295,7 @@ if __name__ == "__main__":
                 'TWSa': {'compressors': ZstdCodec(level=9), 'dtype': 'int16', '_FillValue': -9999},
                 'GWSa': {'compressors': ZstdCodec(level=9), 'dtype': 'int16', '_FillValue': -9999},
                 'SWEa': {'compressors': ZstdCodec(level=9), 'dtype': 'int16', '_FillValue': -9999},
-                'CANa': {'compressors': ZstdCodec(level=9), 'dtype': 'int16', '_FillValue': -9999},
+                'CANa': {'compressors': ZstdCodec(level=9), 'dtype': 'float32'},
                 'SMa': {'compressors': ZstdCodec(level=9), 'dtype': 'int16', '_FillValue': -9999},
                 'TWSa_unc': {'compressors': ZstdCodec(level=9), 'dtype': 'float32'},
                 'GWSa_unc': {'compressors': ZstdCodec(level=9), 'dtype': 'float32'},

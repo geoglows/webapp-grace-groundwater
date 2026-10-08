@@ -1,6 +1,7 @@
 import {get} from "zarrita";
 
 import {idbGet, idbPut} from "./db.js";
+import {DATA_VERSION} from "./dataVersion.js";
 
 // The zarr stores are chunked [fullTime, y, x] so any global read must touch
 // every spatial chunk. Chunks are fetched individually through a small fetch
@@ -21,13 +22,16 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export async function loadGlobalFrames({node, varName, zarrUrl, onProgress}) {
   const [nT, nLat, nLon] = node.shape;
-  // GWSa/TWSa are int16 with a sentinel fill for missing months; convert it to
-  // NaN as chunks are unpacked so the Float32 frame buffer carries real gaps,
-  // not the raw integer sentinel. (The _unc/coord arrays are float, NaN-filled.)
+  // Most variables are int16 with a sentinel fill for missing months; convert it
+  // to NaN as chunks are unpacked so the Float32 frame buffer carries real gaps,
+  // not the raw integer sentinel. CANa, the _unc arrays and the coordinates are
+  // float and already NaN-filled, and fall through this untouched — NaN never
+  // equals the sentinel.
   const fill = node.attrs?._FillValue ?? -32768;
-  // "nan" marks the buffer as fill-masked; bumping it invalidates any pre-mask
-  // cache that still has the raw int16 sentinel baked in.
-  const cacheKey = `global|${zarrUrl}|${varName}|f32nan|${nT}x${nLat}x${nLon}`;
+  // "nan" marks the buffer as fill-masked. DATA_VERSION is what invalidates this
+  // when the store is rebuilt with corrected values, which changes neither the
+  // URL nor the shape.
+  const cacheKey = `global|${zarrUrl}|${varName}|f32nan|${DATA_VERSION}|${nT}x${nLat}x${nLon}`;
 
   try {
     const cached = await idbGet(cacheKey);

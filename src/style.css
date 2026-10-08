@@ -4,10 +4,6 @@
     --font-sans: Arial, Helvetica, sans-serif;
 }
 
-:root {
-    --nav-height: 70px;
-}
-
 [data-icon] > svg {
     height: 100%;
     width: 100%;
@@ -25,6 +21,9 @@
     flex: 0 0 var(--chart-panel-size, 32%);
     min-height: 0;
     overflow: hidden;
+    font-family: "Open Sans", "Segoe UI", system-ui, sans-serif;
+    background: var(--surface);
+    color: var(--text);
 }
 
 .panel-splitter {
@@ -37,9 +36,9 @@
        big enough to hit without aiming. */
     height: 14px;
     cursor: row-resize;
-    background: #e2e8f0;
-    border-top: 2px solid #000;
-    border-bottom: 1px solid #cbd5e1;
+    background: var(--surface2);
+    border-top: 2px solid var(--bg);
+    border-bottom: 1px solid var(--border);
     /* Pointer events must not be turned into scrolling/panning gestures, or a
        touch drag would scroll the page instead of moving the divider. */
     touch-action: none;
@@ -47,7 +46,7 @@
 
 .panel-splitter:hover,
 .panel-splitter:focus-visible {
-    background: #bae6fd;
+    background: var(--border);
     outline: none;
 }
 
@@ -56,12 +55,12 @@
 .panel-splitter-grip {
     width: 34px;
     height: 4px;
-    background: radial-gradient(circle, #64748b 1.6px, transparent 1.8px) repeat-x center / 12px 4px;
+    background: radial-gradient(circle, var(--text-faint) 1.6px, transparent 1.8px) repeat-x center / 12px 4px;
 }
 
 .panel-splitter:hover .panel-splitter-grip,
 .panel-splitter:focus-visible .panel-splitter-grip {
-    background: radial-gradient(circle, #0369a1 1.6px, transparent 1.8px) repeat-x center / 12px 4px;
+    background: radial-gradient(circle, var(--accent) 1.6px, transparent 1.8px) repeat-x center / 12px 4px;
 }
 
 /* These two elements are shown and hidden together (setChartVisible). Tailwind's
@@ -105,137 +104,803 @@ body.panel-resizing * {
     right: 8px;
     z-index: 1;
     cursor: pointer;
-    border: 1px solid #cbd5e1;
-    border-radius: 4px;
-    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    background: var(--bg);
     padding: 3px 8px;
+    font: inherit;
     font-size: 11px;
-    color: #334155;
-    transition: background 0.15s ease;
+    color: var(--text-dim);
+    transition: 0.15s ease;
 }
 
 .ts-download:hover,
 .ts-download:focus-visible {
-    background: #e2e8f0;
+    background: var(--surface2);
+    border-color: var(--accent);
+    color: var(--accent);
     outline: none;
 }
 
-/* ------------------------------------------------------------------ *
- * Nav bar. Mirrors rfs-v2-hydroviewer/src/css/main.css so the two apps
- * present the same header when served together under apps.geoglows.
- * ------------------------------------------------------------------ */
-.nav-bar-wrapper {
+/* ── GEOGLOWS control-column theme ──────────────────────────────────────────
+   The left panel and the breadcrumb strip are styled to match aquiferx, which
+   in turn lifted its tokens from webapp-rfs-v3, so the three apps read as one
+   family: dark surfaces, Open Sans, a cyan accent, uppercase tracked-out
+   section eyebrows.
+
+   Scope is deliberate. Only the .rfs-* rules below read these tokens; the map,
+   the chart panel, the color bar and the modals stay on the light Tailwind
+   palette they already use. */
+
+@font-face {
+    font-family: "Open Sans";
+    font-weight: 400 700;
+    font-style: normal;
+    font-display: swap;
+    src: url("/fonts/opensans.woff2") format("woff2");
+}
+
+/* Dark is the default, so a page with no data-theme set looks the way the app
+   shipped. The light set below overrides the colours and nothing else — radii
+   are not a theme — and because every surface in the app, including the map
+   overlays in the shadow DOM, is painted from these tokens, swapping them is
+   the whole of a theme change.
+
+   color-scheme lives here rather than on each panel now that the whole app is
+   themed together: it tells the browser how to draw its own parts — scrollbars,
+   carets, selection, a select's popup — and those should follow the app. */
+:root {
+    color-scheme: dark;
+
+    --bg: #0a0e17;
+    --surface: #111827;
+    --surface2: #1e293b;
+    --border: #334155;
+    --text: #f8fafc;
+    --text-dim: #dde5ee;
+    --text-faint: #b6c2d3;
+    --accent: #38bdf8;
+    --on-accent: #04121b;
+
+    /* Chart chrome. Kept separate from the surface tokens because a chart's
+       grid has to sit further back than any border does — it is a reading aid
+       behind the data, not an edge. Read by timeseriesChart.js. */
+    --chart-grid: rgba(148, 163, 184, 0.14);
+    --chart-axis: #64748b;
+    --chart-text: #b6c2d3;
+
+    /* Uploaded regions, in the list and on the map. Green against everything
+       else the map draws; a token because the shade that reads on near-black is
+       washed out on white. */
+    --user-region: #4ade80;
+    --user-region-strong: #86efac;
+
+    --r-sm: 4px;
+    --r-md: 6px;
+    --r-lg: 8px;
+}
+
+/* The same roles on a pale ground. --bg is the recessed one in both themes: it
+   is what a control sits in, so it goes darker than --surface in dark and
+   lighter in light. --accent deepens, because the cyan that reads on near-black
+   is too pale to put white text on. */
+:root[data-theme="light"] {
+    color-scheme: light;
+
+    --bg: #eef2f7;
+    --surface: #ffffff;
+    --surface2: #f1f5f9;
+    --border: #cbd5e1;
+    --text: #0f172a;
+    --text-dim: #334155;
+    --text-faint: #64748b;
+    --accent: #0369a1;
+    --on-accent: #ffffff;
+
+    --chart-grid: rgba(71, 85, 105, 0.16);
+    --chart-axis: #475569;
+    --chart-text: #475569;
+
+    --user-region: #15803d;
+    --user-region-strong: #166534;
+}
+
+.rfs-panel {
+    /* The region list owns its own scrolling; this is the fallback for a window
+       too short to show the controls above it. */
+    overflow-y: auto;
+    font-family: "Open Sans", "Segoe UI", system-ui, sans-serif;
+    background: var(--surface);
+    color: var(--text);
+    border-right: 1px solid var(--border);
+}
+
+/* ── Panel header: wordmark and account beside it, then the title ── */
+.rfs-head {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 16px 18px;
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+}
+
+.rfs-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+/* The logo file is a dark wordmark, so it carries its own white chip rather
+   than disappearing into the panel. */
+.rfs-brand img {
+    display: block;
+    height: 30px;
+    width: auto;
+    background: #fff;
+    border-radius: var(--r-md);
+    padding: 6px 9px;
+}
+
+.rfs-title {
+    font-size: 21px;
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.015em;
+    color: var(--accent);
+}
+
+/* ── Section eyebrow: the centered, tracked-out caps heading ── */
+.rfs-eyebrow {
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    text-align: center;
+    padding: 12px 18px 8px;
+}
+
+/* ── Controls block above the region list ── */
+.rfs-controls {
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+}
+
+.rfs-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-faint);
+    margin-bottom: 5px;
+}
+
+.rfs-select,
+.rfs-input {
+    width: 100%;
+    padding: 7px 9px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+}
+
+.rfs-select:focus-visible,
+.rfs-input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -1px;
+}
+
+/* Two per row: four actions make a tidy 2x2 that stays legible at 320px, where
+   a single row would clip the labels. They lead the panel, so the margin is
+   below them. */
+.rfs-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-bottom: 16px;
+}
+
+.rfs-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 8px 10px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    cursor: pointer;
+    transition: 0.12s;
+}
+
+.rfs-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+/* The two view buttons are a mutually exclusive pair, same as the icon buttons
+   they replaced — aria-pressed is still the only state carrier. */
+.rfs-btn[aria-pressed="true"] {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--on-accent);
+}
+
+.rfs-btn [data-icon] {
+    display: block;
+    height: 15px;
+    width: 15px;
+    flex-shrink: 0;
+}
+
+/* ── Region list ── */
+.rfs-filter {
+    padding: 0 18px 10px;
+}
+
+/* A fixed height, not a share of what is left over: the controls above this
+   grow as settings move out of the modal, and a list sized by the remainder
+   shrinks every time one does. It scrolls internally at any window height, and
+   the panel scrolls as a whole if a short window cannot fit even this. */
+.rfs-list {
+    flex: 0 0 var(--region-list-height, 260px);
+    min-height: 0;
+    overflow-y: auto;
+    padding-bottom: 8px;
+}
+
+.rfs-list-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 6px 18px;
+    font: inherit;
+    font-size: 13px;
+    color: var(--text-dim);
+    background: none;
+    border: 0;
+    border-left: 3px solid transparent;
+    cursor: pointer;
+}
+
+.rfs-list-item:hover {
+    background: var(--surface2);
+    color: var(--text);
+}
+
+.rfs-list-item[aria-current="true"] {
+    background: var(--surface2);
+    border-left-color: var(--accent);
+    color: var(--accent);
+    font-weight: 600;
+}
+
+.rfs-list-empty {
+    padding: 8px 18px;
+    font-size: 12px;
+    font-style: italic;
+    color: var(--text-faint);
+}
+
+/* ── Breadcrumb strip across the top of the map column ── */
+.rfs-crumbs {
     display: flex;
     flex: 0 0 auto;
-    flex-direction: row;
     align-items: center;
-    padding: 0 25px;
-    border-bottom: 1px solid #e9ecef;
-    height: var(--nav-height);
-    background-color: #81d4fa;
+    gap: 8px;
+    padding: 10px 18px;
+    font-family: "Open Sans", "Segoe UI", system-ui, sans-serif;
+    font-size: 13px;
+    color: var(--text-dim);
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
 }
 
-.nav-bar-wrapper .back-to-portal {
-    display: flex;
-    flex-shrink: 0;
-    align-items: center;
-    padding: 6px;
-    transition: background 0.15s ease;
-}
-
-.nav-bar-wrapper .back-to-portal:hover,
-.nav-bar-wrapper .back-to-portal:focus-visible {
-    background: rgba(255, 255, 255, 0.6);
-    outline: none;
-}
-
-/* The source image is 354x60. Constraining the width and leaving both
-   dimensions `auto` lets the intrinsic ratio drive the height; pinning a
-   height instead would let max-width squash the logo horizontally. */
-.nav-bar-wrapper .back-to-portal-logo {
-    max-width: 150px;
-    width: auto;
-    height: auto;
+.rfs-crumbs [data-icon] {
     display: block;
+    height: 16px;
+    width: 16px;
+    flex-shrink: 0;
 }
 
-.nav-bar-wrapper .app-title {
-    margin-left: 8px;
-    padding-left: 8px;
-    font-size: 2rem;
-    font-weight: bolder;
-    color: #1e293b;
-    /* This title is long enough to reach the nav buttons on mid-width screens,
-       so it ellipsizes rather than pushing them off the bar. */
+.rfs-crumb {
+    padding: 0;
+    font: inherit;
+    color: var(--text);
+    font-weight: 600;
+    background: none;
+    border: 0;
+    cursor: pointer;
+    transition: color 0.12s;
+}
+
+.rfs-crumb:hover {
+    color: var(--accent);
+}
+
+/* The last crumb names where you already are, so it is a label rather than a
+   way to get there. */
+.rfs-crumb-current {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-weight: 500;
+    color: var(--accent);
+}
+
+.rfs-crumb-sep {
+    flex-shrink: 0;
+    color: var(--text-faint);
+}
+
+/* ── Animation control (timeControl.js) ──────────────────────────────────────
+   A dark card floating at the bottom of the map, matching the one aquiferx
+   puts over its raster playback. It sits in the page rather than in the map's
+   shadow DOM, which is the whole reason it can read these tokens at all. */
+.rfs-timebar {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 7px 14px;
+    font-family: "Open Sans", "Segoe UI", system-ui, sans-serif;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+
+.rfs-timebar-play {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 26px;
+    width: 26px;
+    padding: 0;
+    color: var(--text-dim);
+    background: none;
+    border: 0;
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    transition: 0.12s;
+}
+
+.rfs-timebar-play:hover {
+    background: var(--surface2);
+    color: var(--accent);
+}
+
+.rfs-timebar-play [data-icon] {
+    display: block;
+    height: 15px;
+    width: 15px;
+}
+
+/* tabular-nums so the card doesn't twitch as the date ticks over. */
+.rfs-timebar-date {
+    min-width: 62px;
+    font-size: 12px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+}
+
+.rfs-range {
+    width: 260px;
+    height: 4px;
+    margin: 0;
+    accent-color: var(--accent);
+    cursor: pointer;
+}
+
+.rfs-range:disabled {
+    cursor: default;
+    opacity: 0.5;
+}
+
+/* ── Time series variable toggles ───────────────────────────────────────────
+   Which curves the chart carries, independent of the raster the dropdown
+   picks. The displayed layer's row is disabled rather than hidden, so the rule
+   that it is always plotted is visible instead of implied. */
+.rfs-label-spaced {
+    margin-top: 14px;
+}
+
+.rfs-checks {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+/* Two columns: four variables make a tidy 2x2 and give back two rows of panel
+   height, which the region list below is short of. */
+.rfs-checks-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px 8px;
+}
+
+/* A checkbox that is its own row rather than a cell in the grid above. */
+.rfs-check-wide {
+    margin-top: 6px;
+}
+
+/* The ramp the select names, drawn on the -1..1 axis the color bar uses. */
+.rfs-ramp {
+    height: 8px;
+    margin-top: 6px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+}
+
+.rfs-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 2px;
+    font-size: 13px;
+    color: var(--text-dim);
+    cursor: pointer;
+}
+
+.rfs-check input {
+    height: 15px;
+    width: 15px;
+    flex-shrink: 0;
+    cursor: pointer;
+    accent-color: var(--accent);
+}
+
+.rfs-check:has(input:disabled) {
+    cursor: default;
+    color: var(--text-faint);
+}
+
+.rfs-check:has(input:disabled) input {
+    cursor: default;
+}
+
+/* The swatch is the chart line's own color, so the panel and the plot name the
+   same variable the same way. */
+.rfs-check-swatch {
+    height: 3px;
+    width: 14px;
+    flex-shrink: 0;
+    border-radius: 2px;
+}
+
+/* A slider's label and its live value on one line, with the track full width
+   underneath — at 320px a label, track and readout side by side leaves the
+   track too short to aim with. */
+.rfs-slider-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-top: 14px;
+}
+
+.rfs-slider-value {
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+}
+
+.rfs-range-wide {
+    width: 100%;
+    margin-top: 6px;
+}
+
+/* ── Modals ─────────────────────────────────────────────────────────────────
+   These sit in the page rather than in the map's shadow DOM, so unlike the
+   overlays they can use these rules directly. The Tailwind utilities left on
+   them are layout only; every color comes from here. */
+.rfs-modal {
+    font-family: "Open Sans", "Segoe UI", system-ui, sans-serif;
+    background: var(--surface);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.rfs-modal-title {
+    color: var(--accent);
+    letter-spacing: -0.015em;
+}
+
+.rfs-modal-rule {
+    border: 0;
+    border-top: 1px solid var(--border);
+}
+
+.rfs-modal-heading {
+    color: var(--text);
+}
+
+.rfs-modal-note {
+    color: var(--text-faint);
+}
+
+.rfs-modal-value {
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+}
+
+.rfs-modal-check {
+    flex-shrink: 0;
+    cursor: pointer;
+    accent-color: var(--accent);
+}
+
+/* ── Modal buttons ── */
+.rfs-modal-primary,
+.rfs-modal-danger,
+.rfs-modal-secondary {
+    font: inherit;
+    font-weight: 600;
+    border-radius: var(--r-md);
+    cursor: pointer;
+    transition: 0.12s;
+}
+
+.rfs-modal-primary {
+    color: var(--on-accent);
+    background: var(--accent);
+    border: 1px solid var(--accent);
+}
+
+.rfs-modal-primary:hover {
+    filter: brightness(1.1);
+}
+
+.rfs-modal-secondary {
+    color: var(--text-dim);
+    background: var(--bg);
+    border: 1px solid var(--border);
+}
+
+.rfs-modal-secondary:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+/* Destructive, so it keeps red rather than taking the accent — the one button
+   here whose color is a warning rather than a style. */
+.rfs-modal-danger {
+    color: #fff;
+    background: #b91c1c;
+    border: 1px solid #ef4444;
+}
+
+.rfs-modal-danger:hover:not(:disabled) {
+    background: #dc2626;
+}
+
+.rfs-modal-danger:disabled {
+    cursor: default;
+    opacity: 0.45;
+}
+
+/* ── Upload modal's drop zone ── */
+.rfs-dropzone {
+    border: 2px dashed var(--border);
+    border-radius: var(--r-lg);
+    background: var(--bg);
+    transition: 0.12s;
+}
+
+.rfs-dropzone:hover,
+.rfs-dropzone[data-drag="true"] {
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 8%, var(--bg));
+}
+
+.rfs-file-chip {
+    background: var(--bg);
+    border: 1px solid var(--accent);
+    border-radius: var(--r-md);
+    color: var(--text);
+}
+
+/* An uploaded region, in the list and on the map, takes green: the built-in
+   outlines are blue or amber, the mascons fuchsia, a sketch cyan. Panel and map
+   use the same hue so a row and its outline read as the same thing. */
+.rfs-list-item[data-user="true"] {
+    color: var(--user-region);
+}
+
+.rfs-list-item[data-user="true"]:hover {
+    color: var(--user-region-strong);
+}
+
+.rfs-list-item[data-user="true"][aria-current="true"] {
+    border-left-color: var(--user-region);
+    color: var(--user-region-strong);
+}
+
+/* The row is a button, so the remove control is a sibling rather than nested. */
+.rfs-list-row {
+    display: flex;
+    align-items: center;
+}
+
+.rfs-list-row .rfs-list-item {
+    flex: 1 1 auto;
     min-width: 0;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
 }
 
-.nav-bar-wrapper .nav-buttons {
+.rfs-list-remove {
+    flex: 0 0 auto;
+    display: none;
+    padding: 2px 14px 2px 4px;
+    color: var(--text-faint);
+    background: none;
+    border: 0;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.rfs-list-row:hover .rfs-list-remove,
+.rfs-list-remove:focus-visible {
+    display: block;
+}
+
+.rfs-list-remove:hover {
+    color: #f87171;
+}
+
+/* ── Breadcrumb strip actions ───────────────────────────────────────────────
+   Pushed to the right of the trail. Trends act on whatever the trail names, so
+   they belong beside it rather than in the panel of display settings. */
+.rfs-crumbs-actions {
+    display: flex;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 10px;
     margin-left: auto;
-    display: flex;
-    flex-shrink: 0;
-    align-items: center;
-    gap: 4px;
 }
 
-.nav-bar-wrapper .nav-auth {
-    margin-left: 12px;
-    display: flex;
-    flex-shrink: 0;
+.rfs-crumbs-btn {
+    display: inline-flex;
     align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-dim);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    cursor: pointer;
+    transition: 0.12s;
 }
 
-/* Responsive visibility helpers. `.hide-on-small-only` shows by default and is
-   hidden below the breakpoint; `.show-on-small-only` is its inverse. Using
-   `revert` restores each element's own default display (inline for a span,
-   block for a div) instead of forcing one value. */
-.show-on-small-only {
+.rfs-crumbs-btn:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.rfs-crumbs-btn[aria-pressed="true"] {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--on-accent);
+}
+
+.rfs-crumbs-btn:disabled {
+    cursor: default;
+    opacity: 0.6;
+}
+
+.rfs-crumbs-btn [data-icon] {
+    display: block;
+    height: 14px;
+    width: 14px;
+    flex-shrink: 0;
+}
+
+/* Only meaningful while trends are showing, so it is hidden the rest of the
+   time rather than disabled. */
+.rfs-crumbs-field {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-faint);
+}
+
+.rfs-crumbs-field.hidden {
     display: none;
 }
 
-@media (max-width: 800px) {
-    .nav-bar-wrapper {
-        padding: 0 13px;
-    }
-
-    .hide-on-small-only {
-        display: none;
-    }
-
-    .show-on-small-only {
-        display: revert;
-    }
+/* A stepper rather than a dropdown: the windows are an ordered run of lengths,
+   so nudging along it beats opening a menu to move one notch. */
+.rfs-step {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 20px;
+    width: 20px;
+    padding: 0;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--text-dim);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    cursor: pointer;
+    transition: 0.12s;
 }
 
-@layer components {
-    /* Square, icon-only button (nav bar) */
-    .icon-btn {
-        @apply inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-md
-        text-slate-700 transition hover:bg-black/10;
-    }
+.rfs-step:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+}
 
-    /* The global/aquifer view buttons are a mutually exclusive toggle group —
-       aria-pressed is the only state carrier (see main.js setActiveViewButton). */
-    .icon-btn[aria-pressed="true"],
-    .icon-btn[aria-pressed="true"]:hover {
-        @apply bg-slate-800 text-white;
-    }
+.rfs-step:disabled {
+    cursor: default;
+    opacity: 0.35;
+}
 
-    .tooltip {
-        @apply relative;
-    }
+/* Fixed width and tabular figures so the buttons do not shuffle sideways as the
+   label goes from "5 yr" to "All". */
+.rfs-step-value {
+    min-width: 46px;
+    text-align: center;
+    font-size: 12px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text);
+}
 
-    .tooltip[data-tooltip]::after {
-        content: attr(data-tooltip);
-        @apply pointer-events-none absolute left-1/2 top-[calc(100%+6px)] z-50 -translate-x-1/2
-        scale-95 whitespace-nowrap rounded bg-slate-800 px-2 py-1 text-xs font-normal text-white
-        opacity-0 shadow-md transition;
-    }
+.rfs-crumbs-select {
+    padding: 4px 6px;
+    font: inherit;
+    font-size: 12px;
+    color: var(--text);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-sm);
+    cursor: pointer;
+}
 
-    .tooltip[data-tooltip]:hover::after {
-        @apply scale-100 opacity-100;
-    }
+/* The set picker sits above the filter, both inside the same block, so the
+   region list below starts at a fixed place whichever set is showing. */
+.rfs-set-select {
+    margin-bottom: 8px;
+}
+
+/* Attribution for the showing set. Required by some sources' licenses — IGRAC's
+   CC BY-SA 3.0 IGO among them — so it is part of the layout rather than an
+   optional nicety, pinned below the list where it cannot scroll away. */
+.rfs-attribution {
+    flex: 0 0 auto;
+    padding: 8px 18px;
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--text-faint);
+    border-top: 1px solid var(--border);
+}
+
+.rfs-attribution.hidden {
+    display: none;
 }

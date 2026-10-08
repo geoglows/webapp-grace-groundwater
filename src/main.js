@@ -2,36 +2,39 @@ import "@arcgis/core/assets/esri/themes/light/main.css";
 import "./style.css";
 
 import "@arcgis/map-components/components/arcgis-map";
-import "@arcgis/map-components/components/arcgis-zoom";
 import "@arcgis/map-components/components/arcgis-layer-list";
 import "@arcgis/map-components/components/arcgis-locate";
 import "@arcgis/map-components/components/arcgis-scale-bar";
-import "@arcgis/map-components/components/arcgis-expand";
-import "@arcgis/map-components/components/arcgis-basemap-gallery";
-import "@arcgis/map-components/components/arcgis-sketch";
-import "@arcgis/map-components/components/arcgis-time-slider";
 import GeoJSONLayer from "@arcgis/core/layers/GeoJSONLayer.js";
+import GraphicsLayer from "@arcgis/core/layers/GraphicsLayer.js";
+import SketchViewModel from "@arcgis/core/widgets/Sketch/SketchViewModel.js";
+import * as reactiveUtils from "@arcgis/core/core/reactiveUtils.js";
 import FeatureLayer from "@arcgis/core/layers/FeatureLayer.js";
 import Graphic from "@arcgis/core/Graphic.js";
 import SpatialReference from "@arcgis/core/geometry/SpatialReference.js";
 import * as intersectionOperator from "@arcgis/core/geometry/operators/intersectionOperator.js";
 import * as shapePreservingProjectOperator from "@arcgis/core/geometry/operators/shapePreservingProjectOperator.js";
 import * as geodeticAreaOperator from "@arcgis/core/geometry/operators/geodeticAreaOperator.js";
-import * as reactiveUtils from "@arcgis/core/core/reactiveUtils.js";
 
 import {get} from "zarrita";
 
 import {cellPolygonFromCenter} from "./cells.js";
-import {AQUIFERS_URL, MASCONS_URL, ZARR_URL, ZARR_URL_HALF_DEGREE} from "./config.js";
+import {MASCONS_URL, REGION_SETS_URL, ZARR_URL, ZARR_URL_HALF_DEGREE, regionSetUrl} from "./config.js";
 import {clearCacheDB, getOrFetchCoords} from "./db.js";
 import {loadGlobalVariable} from "./globalFramesClient.js";
 import {createGlobalRenderer} from "./globalLayer.js";
 import {hydrateIcons} from "./icons.js";
+import Polygon from "@arcgis/core/geometry/Polygon.js";
 import {parseGeoJSONFile} from "./polygonUploads.js";
+import {deleteUserRegion, listUserRegions, newUserRegionId, putUserRegion} from "./userRegions.js";
+import {INSUFFICIENT, TREND_CATEGORIES, classify, computeFit, computeSlope, fitEndpoints, perCellSlopes, regionMeanSeries} from "./trends.js";
+import {createTimeControl} from "./timeControl.js";
 import {
   COLOR_PALETTES,
   DEFAULT_VIEW,
   DISPLAY_DEFAULTS,
+  TREND_MIN_MONTHS,
+  TREND_THRESHOLDS,
   GLOBAL_PLAY_RATE_MS,
   MAP_BASEMAP,
   MAP_CENTER,
@@ -42,35 +45,162 @@ import {
   UNITS,
   VALUE_LABEL,
   VARIABLES,
+  variableColor,
 } from "./settings.js";
 import {initPanelSplitter} from "./splitPanels.js";
-import {renderTimeseriesChart} from "./timeseriesChart.js";
+import {renderTimeseriesChart, seriesToCsv} from "./timeseriesChart.js";
+import {pruneStaleCache} from "./db.js";
+import {initTheme, isLight, onThemeChange, setTheme, theme} from "./theme.js";
 import {openZarrArray} from "./zarrStore.js";
 
+// Before any painting, so the first frame is already in the right theme.
+initTheme();
+
 hydrateIcons();  // heroicons
+
+// Clear out entries from an earlier DATA_VERSION. Fire and forget: nothing
+// waits on it, and failing leaves the old rows rather than breaking the load.
+pruneStaleCache().catch((err) => console.warn("Could not prune the cache", err));
 
 // Branding (logo, its link, its alt text) is not set here: index.html carries it
 // as %VITE_*% template strings that Vite substitutes at build time.
 
 const displayConfig = {...DISPLAY_DEFAULTS};
 
+// Variables the user has added to the chart beyond the displayed layer, which is
+// always plotted. A display preference like the palette: it outlives one region
+// and follows the user to the next.
+const extraSeries = new Set();
+
+// The displayed layer first — renderTimeseriesChart treats that position as the
+// one the map agrees with — then the extras in the order VARIABLES declares, so
+// the legend does not reshuffle as they are toggled.
+const plottedVariables = () => [
+  displayConfig.variable,
+  ...Object.keys(VARIABLES).filter((k) => k !== displayConfig.variable && extraSeries.has(k)),
+];
+
 // Generate color stops scaled to max value (dynamic or fixed based on toggle)
-const generateStops = () => {
+// Stops for a symmetric +/-maxVal range in `unit`. The palette is the same
+// either way; only the numbers on it change, which is what lets the trend map
+// reuse the anomaly color bar.
+const stopsFor = (maxVal, unit, {decimals = 0} = {}) => {
   const {stops} = COLOR_PALETTES[displayConfig.colorPalette];
-  const maxVal = displayConfig.dynamicColorScale ? displayConfig.maxValue : displayConfig.fixedMaxValue;
   return stops.map(({position, color}) => {
-    const value = Math.round(position * maxVal);
-    const label = value === 0 ? "0" : `${value} ${UNITS}`;
+    const value = Number((position * maxVal).toFixed(decimals));
+    const label = value === 0 ? "0" : `${value} ${unit}`;
     return {value, color, label};
   });
 };
 
+const generateStops = () => {
+  const maxVal = displayConfig.dynamicColorScale ? displayConfig.maxValue : displayConfig.fixedMaxValue;
+  return stopsFor(maxVal, UNITS);
+};
+
+/**
+ * Stops that draw the five trend categories as flat bands rather than a ramp,
+ * so the global per-cell map uses the same colors and the same class boundaries
+ * as the region classification.
+ *
+ * buildLut interpolates between adjacent stops, so each boundary gets a pair a
+ * hair apart: the band's color right up to the threshold, the next band's color
+ * immediately after. Beyond the outermost stops the lookup clamps, which is
+ * what gives the two "extreme" classes their open ends.
+ */
+const trendCategoryStops = () => {
+  const {moderate, extreme} = TREND_THRESHOLDS;
+  const color = (key) => TREND_CATEGORIES.find((c) => c.key === key).color;
+  const EPS = 1e-4;
+  const outer = extreme * 1.5; // anything past this clamps to the extreme color
+  return [
+    {value: -outer, color: color("extreme-decline")},
+    {value: -extreme, color: color("extreme-decline")},
+    {value: -extreme + EPS, color: color("decline")},
+    {value: -moderate, color: color("decline")},
+    {value: -moderate + EPS, color: color("static")},
+    {value: moderate, color: color("static")},
+    {value: moderate + EPS, color: color("increase")},
+    {value: extreme, color: color("increase")},
+    {value: extreme + EPS, color: color("extreme-increase")},
+    {value: outer, color: color("extreme-increase")},
+  ];
+};
+
 // Map elements
 const arcgisMap = document.querySelector("arcgis-map");
-const sketchTool = document.getElementById("sketch-tool");
-const timeSlider = document.getElementById("time-slider");
+// The basemaps the picker offers, in aquiferx's order and under its names. The
+// ids are ArcGIS's own, so switching is an assignment rather than a tile-layer
+// swap — aquiferx has to name the tile URLs because Leaflet has no equivalent.
+const BASEMAPS = [
+  {id: "osm", label: "OpenStreetMap"},
+  {id: "topo-vector", label: "Topographic (Esri)"},
+  {id: "satellite", label: "Imagery (Esri)", dark: true},
+  {id: "streets-vector", label: "Streets (Esri)"},
+  {id: "gray-vector", label: "Light Gray (Esri)"},
+  {id: "dark-gray-vector", label: "Dark Gray (Esri)", dark: true},
+  {id: "terrain", label: "Terrain (Esri)"},
+];
+
+// Imagery is a dark, busy ground: the blue the outlines use over a pale basemap
+// disappears into it. Everything the app draws on the map picks its colors from
+// this rather than assuming a light background.
+const isDarkBasemap = (id) => BASEMAPS.find((b) => b.id === id)?.dark ?? false;
+// Tracked rather than read back from arcgisMap.basemap, which normalizes the id
+// it is assigned into a Basemap instance — there is no id left to compare.
+let darkBasemap = isDarkBasemap(MAP_BASEMAP);
+
+// Drawing is a SketchViewModel behind our own button rather than <arcgis-sketch>:
+// the widget's toolbar carried a selection arrow, five polygon drawing modes, an
+// undo/redo pair and a snapping menu, and only the mode picker can't be switched
+// off through a hide* property. Owning the button is the only way to one button.
+const drawLayer = new GraphicsLayer({title: "User drawn polygons", listMode: "hide"});
+// Uploaded regions live apart from the sketch layer: a sketch is scratch work
+// that the next one replaces, an upload is kept and belongs beside the built-in
+// outlines. resetLayers clears the first and leaves this one alone, which is why
+// an upload used to vanish on the way Home.
+const uploadedLayer = new GraphicsLayer({title: "Uploaded regions", listMode: "hide"});
+// The one cell picked out of the whole-world raster. Its own layer so clearing
+// it never disturbs a sketch or an uploaded outline.
+const cellPickLayer = new GraphicsLayer({title: "Selected cell", listMode: "hide"});
+
+// Green, so an upload stands apart from the built-in outlines (blue, or amber
+// over imagery) and from a sketch (cyan). The list rows use the same hue.
+const uploadedSymbolFor = (dark) => ({
+  type: "simple-fill",
+  color: dark ? [74, 222, 128, 0.16] : [34, 197, 94, 0.14],
+  outline: {color: dark ? [134, 239, 172, 0.95] : [21, 128, 61, 0.95], width: 1.5},
+});
+// Shared by the sketch and by an uploaded boundary — both are "the polygon this
+// analysis is for", so both are drawn the same way.
+const drawnSymbol = {
+  type: "simple-fill",
+  color: [56, 189, 248, 0.15],
+  outline: {color: [56, 189, 248, 0.9], width: 2},
+};
+const zoomControl = document.getElementById("zoom-control");
+const zoomInButton = document.getElementById("zoom-in");
+const zoomOutButton = document.getElementById("zoom-out");
+const basemapControl = document.getElementById("basemap-control");
+const basemapButton = document.getElementById("basemap-button");
+const basemapMenu = document.getElementById("basemap-menu");
+const drawControl = document.getElementById("draw-control");
+const drawButton = document.getElementById("draw-button");
+const drawLabel = drawButton.querySelector("[data-draw-label]");
+let sketch = null; // created once the view exists (bootMapUi)
+const timeControlRoot = document.getElementById("time-control");
+// Built on first use rather than at module load: its index space is the full
+// date list, which only exists after the store's time axis has been read.
+let timeControl = null;
 const timeseriesPlotDiv = document.getElementById("timeseries-plot");
-const appInstructions = timeseriesPlotDiv.innerHTML
+const appInstructions = timeseriesPlotDiv.innerHTML;
+
+// The same centred prompt the panel ships with, for the other things the panel
+// has to say. Built from a template rather than repeated so the styling of an
+// empty chart panel lives in index.html and nowhere else.
+const panelPrompt = (text) =>
+  appInstructions.replace(/>[^<>]+</, `>${text}<`);
+const GLOBAL_PROMPT = panelPrompt("Select a cell to view time series");
 
 arcgisMap.basemap = MAP_BASEMAP;
 arcgisMap.center = MAP_CENTER;
@@ -103,13 +233,33 @@ const borderWidthValue = document.getElementById("border-width-value");
 const dynamicScaleToggle = document.getElementById("dynamic-scale-toggle");
 const dynamicScaleNote = document.getElementById("dynamic-scale-note");
 const legendToggle = document.getElementById("legend-toggle");
+const seriesToggles = document.getElementById("series-toggles");
+const trendsButton = document.getElementById("trends-button");
+const trendWindowField = document.getElementById("trend-window");
+const trendWindowValue = document.getElementById("trend-window-value");
+const trendWindowDown = document.getElementById("trend-window-down");
+const trendWindowUp = document.getElementById("trend-window-up");
+const trendsLabel = document.querySelector("[data-trends-label]");
+const trendLegendDiv = document.getElementById("trend-legend");
+const trendLegendTitle = document.getElementById("trend-legend-title");
+const trendLegendSub = document.getElementById("trend-legend-sub");
+const trendLegendRows = document.getElementById("trend-legend-rows");
+const regionSetSelect = document.getElementById("region-set-select");
+const regionAttribution = document.getElementById("region-attribution");
+const regionList = document.getElementById("region-list");
+const regionFilter = document.getElementById("region-filter");
+const breadcrumb = document.getElementById("breadcrumb");
+const crumbHome = document.getElementById("crumb-home");
+const regionNamesToggle = document.getElementById("region-names-toggle");
+const lightModeToggle = document.getElementById("light-mode-toggle");
 const masconToggle = document.getElementById("mascon-toggle");
 const masconWidthSlider = document.getElementById("mascon-width");
 const masconWidthValue = document.getElementById("mascon-width-value");
-const halfDegreeToggle = document.getElementById("half-degree-toggle");
 const opacitySlider = document.getElementById("opacity-slider");
 const opacityValue = document.getElementById("opacity-value");
-const paletteOptions = document.getElementById("palette-options");
+const paletteSelect = document.getElementById("palette-select");
+const palettePreview = document.getElementById("palette-preview");
+const fillGapsToggle = document.getElementById("fill-gaps-toggle");
 
 // Build the two lists that are generated from data rather than written out in
 // index.html — the layer dropdown from VARIABLES, the palette radios from
@@ -126,28 +276,36 @@ const syncSettingsControls = () => {
   );
   variableSelect.value = displayConfig.variable;
 
-  paletteOptions.replaceChildren(
+  paletteSelect.replaceChildren(
     ...Object.entries(COLOR_PALETTES).map(([key, {label}]) => {
-      const option = document.createElement("label");
-      option.className = "flex cursor-pointer items-center gap-3 rounded-md border-2 border-neutral-300 px-3 py-2 transition hover:bg-neutral-100 has-[input:checked]:border-sky-700 has-[input:checked]:bg-sky-50";
+      const option = document.createElement("option");
+      option.value = key;
+      option.textContent = label;
+      return option;
+    }),
+  );
+  paletteSelect.value = displayConfig.colorPalette;
+  palettePreview.style.background = paletteCssGradient(displayConfig.colorPalette);
 
-      const radio = document.createElement("input");
-      radio.type = "radio";
-      radio.name = "color-palette";
-      radio.value = key;
-      radio.className = "hidden";
-      radio.checked = key === displayConfig.colorPalette;
+  seriesToggles.replaceChildren(
+    ...Object.entries(VARIABLES).map(([key]) => {
+      const row = document.createElement("label");
+      row.className = "rfs-check";
+
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.value = key;
+      box.dataset.series = key;
 
       const swatch = document.createElement("span");
-      swatch.className = "block h-5 w-20 rounded-sm border border-neutral-300";
-      swatch.style.background = paletteCssGradient(key);
+      swatch.className = "rfs-check-swatch";
+      swatch.style.background = variableColor(key, isLight());
 
       const name = document.createElement("span");
-      name.className = "text-sm text-neutral-800";
-      name.textContent = label;
+      name.textContent = key;
 
-      option.append(radio, swatch, name);
-      return option;
+      row.append(box, swatch, name);
+      return row;
     }),
   );
 
@@ -157,22 +315,70 @@ const syncSettingsControls = () => {
   borderWidthSlider.value = String(displayConfig.borderWidth);
   borderWidthValue.textContent = `${displayConfig.borderWidth}px`;
   legendToggle.checked = displayConfig.showLegend;
+  regionNamesToggle.checked = displayConfig.showRegionNames;
   masconToggle.checked = displayConfig.showMascons;
+  fillGapsToggle.checked = displayConfig.fillGaps;
+  lightModeToggle.checked = isLight();
   masconWidthSlider.value = String(displayConfig.masconWidth);
   masconWidthValue.textContent = `${displayConfig.masconWidth}px`;
-  halfDegreeToggle.checked = displayConfig.halfDegreeCells;
   dynamicScaleToggle.checked = displayConfig.dynamicColorScale;
   // The fixed range is configurable, so the sentence explaining it has to be too.
   dynamicScaleNote.textContent = `When enabled, the color scale fits the actual min/max values in the selected region, with 0 always shown as the center color. When disabled, uses a fixed range of -${displayConfig.fixedMaxValue} to +${displayConfig.fixedMaxValue} ${UNITS}.`;
+};
+
+// The displayed layer is checked and locked: the chart always carries what the
+// map is showing, and a box that could turn it off would be lying.
+const syncSeriesToggles = () => {
+  for (const box of seriesToggles.querySelectorAll("[data-series]")) {
+    const key = box.dataset.series;
+    const isDisplayed = key === displayConfig.variable;
+    box.checked = isDisplayed || extraSeries.has(key);
+    box.disabled = isDisplayed;
+    box.title = isDisplayed ? "The displayed layer is always plotted" : "";
+  }
 };
 
 // Which of the two resolutions the app is currently reading. Every zarr read,
 // every IndexedDB cache key, and every derived quantity (cell size, the raster's
 // georeferencing) follows this, so the 1.0 and 0.5 degree stores never mix —
 // and switching back to one already loaded costs nothing but a cache hit.
-const activeZarrUrl = () => (displayConfig.halfDegreeCells ? ZARR_URL_HALF_DEGREE : ZARR_URL);
+// Two frames: one for the browser to lay out the chart panel that exitGlobalView
+// just revealed, one for the view's resize observer to pick up its new size.
+const afterLayout = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 
-const openArray = (name) => openZarrArray(activeZarrUrl(), name);
+// Hand the browser a turn so it can paint. setTimeout rather than
+// requestAnimationFrame: rendering happens between tasks, and a rAF callback
+// resumes *before* the paint it was waiting for, so rAF would yield the frame
+// without ever letting one be drawn.
+const yieldToBrowser = () => new Promise((resolve) => setTimeout(resolve, 0));
+// How long a synchronous slice may run before giving the renderer a turn. Above
+// a frame's worth of work the map visibly stops moving.
+const SLICE_MS = 12;
+
+// Resolution is a property of the variable (see VARIABLES in settings.js), so
+// the store a read goes to follows from what is being read rather than from any
+// setting. Both stores carry the same 290 month time axis and their grids nest,
+// which is what lets one analysis mix them.
+const ZARR_URLS = {"1.0": ZARR_URL, "0.5": ZARR_URL_HALF_DEGREE};
+const RESOLUTIONS = Object.keys(ZARR_URLS);
+const resolutionOf = (varName) => VARIABLES[varName].resolution;
+const zarrUrlFor = (resolution) => ZARR_URLS[resolution];
+// The grid the map's raster is drawn on: whichever the displayed layer uses.
+const displayedResolution = () => resolutionOf(displayConfig.variable);
+
+// Cell boundaries for the global raster: the same black-on-pale, white-on-dark
+// rule the regional cells follow, at partial opacity so the grid reads as edges
+// between cells rather than as a mesh drawn over them.
+const globalBorderConfig = () => ({
+  show: displayConfig.showBorders,
+  width: displayConfig.borderWidth,
+  color: darkBasemap ? [255, 255, 255, 0.5] : [0, 0, 0, 0.5],
+});
+// Both stores carry the same 290 month axis, so the time array is read from one
+// of them rather than once per grid.
+const TIME_RESOLUTION = "1.0";
+
+const openArray = (name, resolution) => openZarrArray(zarrUrlFor(resolution), name);
 
 // ---- Lazily-loaded shared inputs -------------------------------------------
 // NOTHING in this module may sit at the top level behind `await`. A module with
@@ -185,25 +391,25 @@ const openArray = (name) => openZarrArray(activeZarrUrl(), name);
 // Instead each shared input is a memoized promise that clears itself on
 // failure, so pressing the globe button retries it.
 
-let coordsPromise = null;
-const ensureCoords = () => {
-  coordsPromise ??= getOrFetchCoords({zarrUrl: activeZarrUrl()}).catch((err) => {
-    coordsPromise = null;
-    geoPromise = null;
+const coordsPromises = {};
+const ensureCoords = (resolution) => {
+  coordsPromises[resolution] ??= getOrFetchCoords({zarrUrl: zarrUrlFor(resolution)}).catch((err) => {
+    delete coordsPromises[resolution];
+    delete geoPromises[resolution];
     throw err;
   });
-  return coordsPromise;
+  return coordsPromises[resolution];
 };
 
 // Grid origin derived from the coordinate arrays; needed by the renderer to
 // georeference the raster and by the workers to pick preview time steps.
-let geoPromise = null;
-const ensureGeo = () => {
-  geoPromise ??= ensureCoords().then(({lat, lon}) => {
+const geoPromises = {};
+const ensureGeo = (resolution) => {
+  geoPromises[resolution] ??= ensureCoords(resolution).then(({lat, lon}) => {
     const cellSize = lat.data[1] - lat.data[0];
     return {cellSize, lat0: lat.data[0], lon0: lon.data[0], latEdgeMin: lat.data[0] - cellSize / 2};
   });
-  return geoPromise;
+  return geoPromises[resolution];
 };
 
 // The time array holds plain numbers; the CF `units` attribute on it is what
@@ -261,7 +467,7 @@ let timeDates = null;
 let timeDatesPromise = null;
 const ensureTimeDates = () => {
   timeDatesPromise ??= (async () => {
-    const timeNode = await openArray("time");
+    const timeNode = await openArray("time", TIME_RESOLUTION);
     const timeIntegers = await get(timeNode, [null]);
     const units = parseTimeUnits(timeNode.attrs?.units);
     if (!units) {
@@ -284,9 +490,10 @@ const ensureTimeDates = () => {
 // A missing <var>_unc array is tolerated (unc: null -> no uncertainty band).
 const varNodePromises = {};
 const getVarNodes = (varName) => {
+  const resolution = resolutionOf(varName);
   varNodePromises[varName] ??= Promise.all([
-    openArray(varName),
-    openArray(`${varName}_unc`).catch(() => null),
+    openArray(varName, resolution),
+    openArray(`${varName}_unc`, resolution).catch(() => null),
   ])
     .then(([value, unc]) => ({value, unc}))
     .catch((err) => {
@@ -303,42 +510,1038 @@ const maskFill = (node, {data, shape, stride}) => {
   for (let i = 0; i < data.length; i++) out[i] = data[i] === fill ? NaN : data[i];
   return {data: out, shape, stride};
 };
-const boundaryLayer = new GeoJSONLayer({
-  title: "Aquifer Boundaries",
-  url: AQUIFERS_URL,
+// A tinted fill with a thin outline, rather than the heavy black outline this
+// started with: at world zoom the 81 regions overlap enough that 2px black
+// reads as scribble (dense clusters like the US High Plains lose their
+// individual shapes entirely). The fill is what makes a region legible when its
+// outline is only a few pixels across.
+// Amber over imagery rather than a brighter blue: satellite tiles are mostly
+// blues and greens, so a warm hue is the one that separates from them at any
+// zoom. It is the same hue aquiferx gives its aquifer outlines, for the same
+// reason. The outline also thickens slightly — imagery has texture to compete
+// with where a flat basemap does not.
+const regionSymbolFor = (dark) => ({
+  type: "simple-fill",
+  color: dark ? [250, 204, 21, 0.10] : [37, 99, 235, 0.12],
+  outline: {
+    color: dark ? [250, 204, 21, 0.95] : [30, 64, 175, 0.75],
+    width: dark ? 1.25 : 1,
+  },
+});
+
+// Names are drawn by the layer rather than as separate graphics so the SDK's
+// label engine handles collisions. minScale is what keeps the map readable:
+// collision dropping alone still leaves continent zoom covered in names longer
+// than the regions under them, so nothing is labeled until the view is closer
+// in than regionLabelMinScale.
+// Over imagery the halo inverts: white text on a dark halo, which is how a
+// label stays readable when the ground underneath it changes from ocean to
+// cloud to desert within one name.
+const regionLabelFor = (dark) => ({
+  labelExpressionInfo: {expression: "$feature.n"},
+  labelPlacement: "always-horizontal",
+  minScale: displayConfig.regionLabelMinScale,
+  symbol: {
+    type: "text",
+    color: dark ? [255, 255, 255, 1] : [23, 37, 84, 1],
+    haloColor: dark ? [0, 0, 0, 0.85] : [255, 255, 255, 0.95],
+    haloSize: 1.5,
+    font: {size: 9, weight: "bold"},
+  },
+});
+
+// Renderers are immutable once assigned, so a basemap change means handing each
+// layer a new one rather than editing what it has.
+const applyBasemapContrast = (basemapId) => {
+  darkBasemap = isDarkBasemap(basemapId);
+  // Trends own the region fill while they are showing, so they are recolored
+  // rather than replaced.
+  applyRegionRenderer();
+  boundaryLayer.labelingInfo = [regionLabelFor(darkBasemap)];
+  masconLayer.renderer = masconRenderer();
+  paintUploadedSymbols();
+  if (globalView.renderer) {
+    globalView.renderer.setBorders(globalBorderConfig());
+    if (globalView.active) globalView.renderer.redraw();
+  }
+};
+
+// Every set is a separate file, so switching means a new layer rather than a new
+// URL on the old one: a GeoJSONLayer infers its fields when it loads, and
+// swapping the source under a loaded layer is not something the SDK promises to
+// handle. `boundaryLayer` is therefore rebound rather than mutated. Everything
+// else in this module reads it when it runs, so nothing holds a stale one.
+// Analyzing a region used to hide the rest with a definitionExpression, which
+// left no way to switch except going Home first. They stay drawn and step back
+// instead: faint enough not to compete with the anomaly cells underneath, solid
+// enough to see and click.
+const regionSymbolDimmed = (dark) => ({
+  type: "simple-fill",
+  // A grey wash rather than an outline alone. Unfilled, a thin low-opacity line
+  // was invisible against a busy basemap, which defeats the point of leaving the
+  // other regions on the map at all: they have to be findable to be clickable.
+  // Grey because it reads as "not the subject" against the blue and amber the
+  // active region and the anomaly scale use.
+  color: dark ? [148, 163, 184, 0.22] : [100, 116, 139, 0.2],
+  outline: {color: dark ? [203, 213, 225, 0.65] : [51, 65, 85, 0.6], width: 1},
+});
+
+const regionSymbolActive = (dark) => ({
+  type: "simple-fill",
+  color: [0, 0, 0, 0], // the anomaly cells fill it; a tint on top would muddy them
+  outline: {color: dark ? [253, 224, 71, 1] : [30, 58, 138, 1], width: 2.5},
+});
+
+// One place decides how the outlines are drawn, because three things want a say:
+// whether a classification is showing, which region is being analyzed, and the
+// basemap's brightness.
+const applyRegionRenderer = () => {
+  if (trendState.on && trendState.mode === "region") {
+    applyTrendRenderer();
+    return;
+  }
+  if (activeRegionId === null) {
+    boundaryLayer.renderer = {type: "simple", symbol: regionSymbolFor(darkBasemap)};
+    return;
+  }
+  boundaryLayer.renderer = {
+    type: "unique-value",
+    field: "id",
+    defaultSymbol: regionSymbolDimmed(darkBasemap),
+    uniqueValueInfos: [{value: activeRegionId, symbol: regionSymbolActive(darkBasemap)}],
+  };
+};
+
+const makeBoundaryLayer = (url) => new GeoJSONLayer({
+  title: "Region Boundaries",
+  url,
   outFields: ["*"],
   definitionExpression: "1=1", // start with none selected
-  renderer: {
-    type: "simple",
-    symbol: {
-      type: "simple-fill",
-      color: [255, 255, 255, 0],
-      outline: {color: [0, 0, 0, 1], width: 2}
+  renderer: {type: "simple", symbol: regionSymbolFor(darkBasemap)},
+  // Clicking a region analyzes it directly (see the view click handler in
+  // init) — the popup this used to open only ever held one button.
+  popupEnabled: false,
+  labelingInfo: [regionLabelFor(darkBasemap)],
+  labelsVisible: displayConfig.showRegionNames,
+});
+
+// The sets from the manifest, plus "My Regions" — the uploads, which have no
+// file and are drawn from IndexedDB instead.
+const MY_REGIONS = {id: "my-regions", label: "My Regions", file: null, attribution: null};
+let regionSets = [MY_REGIONS];
+let activeRegionSet = MY_REGIONS;
+
+// Starts on My Regions, which needs no network, and is replaced the moment the
+// manifest resolves. A layer always exists so nothing has to null-check it.
+let boundaryLayer = makeBoundaryLayer(null);
+
+// Swap the outlines to another set. Everything keyed on a region id belongs to
+// one set — ids collide across them — so the classification, the cached rings
+// and the current selection are all dropped.
+// select:false for a caller that is about to analyze something itself — the
+// upload flow, which knows exactly which region it wants and would otherwise
+// have the auto-select run the same analysis first.
+// Which of the two outline layers is showing follows from the active set and
+// the active view, and from nothing else. Carrying the previous layer's
+// visibility across a switch is what emptied a published set after a visit to
+// My Regions: that set hides boundaryLayer, so coming back computed
+// "has a file AND was visible" and left it hidden.
+const applyOutlineVisibility = () => {
+  const showOutlines = !globalView.active; // the whole-world raster covers them
+  boundaryLayer.visible = showOutlines && Boolean(activeRegionSet.file);
+  uploadedLayer.visible = showOutlines && !activeRegionSet.file;
+  // Drawing belongs to My Regions: a sketch is a region of the user's own, and
+  // the published sets are not theirs to add to. Hidden rather than disabled,
+  // since there is nothing to explain — it simply is not part of those sets.
+  drawControl.classList.toggle("hidden", Boolean(activeRegionSet.file) || globalView.active);
+  if (activeRegionSet.file && sketch?.state === "active") sketch.cancel();
+};
+
+const setRegionSet = async (set, {select = true} = {}) => {
+  // Picking a set is a statement about which outlines to work with, and the
+  // whole-world raster covers them — so leave the global view for the one where
+  // the choice has an effect. Before activeRegionSet changes, because
+  // applyOutlineVisibility reads both.
+  if (globalView.active) {
+    exitGlobalView();
+    clearTimeseriesPanel(appInstructions);
+  }
+  activeRegionSet = set;
+  // A classification belongs to the regions it was computed for, and these are
+  // different regions — ids do not even mean the same thing across sets. Trends
+  // stay on and the new set is classified below, rather than the switch
+  // cancelling something the user asked for.
+  if (trendState.on) invalidateTrendPicture();
+  regionRingsPromise = null;
+  setActiveRegion(null);
+  setBreadcrumb(null);
+  // An analysis belongs to the region it was run for, and that region is not in
+  // the new set.
+  clearAnalysis();
+
+  const index = arcgisMap.map?.layers?.indexOf(boundaryLayer) ?? -1;
+  const previous = boundaryLayer;
+  boundaryLayer = makeBoundaryLayer(set.file ? regionSetUrl(set.file) : null);
+  applyOutlineVisibility();
+  if (arcgisMap.map) {
+    arcgisMap.map.remove(previous);
+    // Back where it was, so the mascons and the anomaly raster keep their order.
+    if (index >= 0) arcgisMap.map.add(boundaryLayer, index);
+    else arcgisMap.map.add(boundaryLayer);
+  }
+
+  regionAttribution.textContent = set.attribution ?? "";
+  regionAttribution.classList.toggle("hidden", !set.attribution);
+
+  builtinRows = [];
+  paintRegionList();
+  if (!set.file) {
+    // My Regions: nothing to load, the uploads are the set.
+    await loadUserRegions();
+    if (!firstRegionSet && select) fitOrSelectRegionSet();
+    firstRegionSet = false;
+    ensureTrendsForView(); // My Regions classifies its uploads the same way
+    return;
+  }
+  await boundaryLayer.load();
+  await buildRegionList();
+  await loadUserRegions();
+  // Not on the first load: the app opens on the view VITE_DEFAULT_VIEW asks for,
+  // at the camera .env configured, and refitting here would override it.
+  if (!firstRegionSet && select) fitOrSelectRegionSet();
+  firstRegionSet = false;
+  ensureTrendsForView(); // classify the set just loaded, if trends are on
+};
+
+// The initial set is applied during boot, where the camera belongs to whichever
+// view the app opens in.
+let firstRegionSet = true;
+
+// The uploads' combined extent, unioned from the graphics themselves.
+// GraphicsLayer.fullExtent is not derived from what the layer holds — it is the
+// whole world until something sets it — so trusting it zoomed the camera past
+// the globe instead of onto the uploads.
+const uploadedExtent = () => {
+  let union = null;
+  for (const graphic of uploadedLayer.graphics) {
+    const extent = graphic.geometry?.extent;
+    if (!extent) continue;
+    union = union ? union.union(extent) : extent.clone();
+  }
+  return union;
+};
+
+// A set with exactly one region analyzes it rather than framing it and waiting
+// to be clicked: there is nothing else in the set to choose, so the click would
+// only be ceremony. The analysis fits the camera itself, so this replaces the
+// fit rather than following it.
+const fitOrSelectRegionSet = () => {
+  if (regionRows.length === 1) {
+    activateRegionRow(regionRows[0]);
+    return;
+  }
+  fitRegionSet();
+};
+
+// Frame whatever the new set covers, so switching does not leave the camera
+// over a region that is not in it. An empty My Regions has nothing to frame, so
+// the camera is left where it is rather than sent somewhere arbitrary.
+const fitRegionSet = () => {
+  const extent = activeRegionSet.file ? boundaryLayer.fullExtent : uploadedExtent();
+  if (!extent) return;
+  // A single uploaded region can be small enough that its own extent is a
+  // street-level camera, so the fit is floored at a scale that still shows
+  // context around it.
+  const target = extent.clone().expand(1.1);
+  arcgisMap.view?.goTo(target)
+    .then(() => {
+      if (arcgisMap.view.scale < MIN_FIT_SCALE) arcgisMap.view.scale = MIN_FIT_SCALE;
+    })
+    .catch(() => {});
+};
+
+// ~1:2M, a few counties across: closer than this and a small uploaded polygon
+// fills the screen with no idea where on Earth it is.
+const MIN_FIT_SCALE = 2_000_000;
+
+// ---- Trend classification --------------------------------------------------
+// Every region colored by the slope of its own area-mean series, computed off
+// the whole-world frames the global view already downloads rather than by
+// running the per-region analysis 81 times. See trends.js for what that trades.
+const trendState = {
+  on: false,
+  running: false,
+  // "region" (outlines classified) or "global" (per-cell trend raster). The two
+  // belong to different views, so a view change clears whichever does not fit.
+  mode: null,
+  // varName the showing classification was computed for, so switching the
+  // displayed layer recomputes rather than mislabeling.
+  varName: null,
+  // Years back from the newest month, or null for the whole record. A shorter
+  // window answers a different question — what storage has been doing lately,
+  // rather than over the mission — and the two can disagree in sign.
+  //
+  // Opens at the shortest window, because recent behaviour is the usual question
+  // and a 24 year fit flattens anything that has turned around. Changing it
+  // sticks: turning trends off and on again keeps the window last chosen, and a
+  // record too short for 5 years falls back to All when the stepper is painted.
+  years: 5,
+  byRegion: new Map(), // region id -> category
+};
+
+// Rings per region, queried once. The boundary layer holds them already; this
+// pulls them into plain arrays so the point-in-polygon test in trends.js can
+// work without the geometry operators.
+let regionRingsPromise = null;
+const ensureRegionRings = () => {
+  regionRingsPromise ??= (async () => {
+    // My Regions carries its rings already; the classification reads them from
+    // the list rather than from a layer.
+    if (!activeRegionSet.file) {
+      return userRows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        rings: r.rings,
+        extent: ringsExtent(r.rings),
+      }));
     }
-  },
-  popupTemplate: {
-    title: "{n}",
-    // overwriteActions: true,
-    dockEnabled: false,
-    dockOptions: {
-      buttonEnabled: false,
-      breakpoint: false
-    },
-    attributes: {
-      id: {fieldName: "id"},
-    },
-    actions: [],
-    content: () => {
-      const div = document.createElement("div");
-      div.innerHTML = `<div role="button" style="border: 1px solid black; padding: 8px; margin-top: 8px; text-align: center; font-weight: bold; background-color: #0079c1; color: white; cursor: pointer;">Analyze This Aquifer</div>`
-      div.onclick = () => {
-        analyzeGlobalAquifer({aquiferId: arcgisMap.view.popup.selectedFeature.attributes.id});
-        arcgisMap.view.popup.close();
-      }
-      return div;
+    await boundaryLayer.load();
+    const q = boundaryLayer.createQuery();
+    q.where = "1=1";
+    q.outFields = ["id", "n"];
+    q.returnGeometry = true;
+    const {features} = await boundaryLayer.queryFeatures(q);
+    // A null id means the layer typed the field from features that disagreed —
+    // a set mixing 1 with "whymap-3" types it numeric and nulls every string.
+    // Those regions would silently vanish from the classification, so say so.
+    const nulls = features.filter((f) => f.attributes.id == null).length;
+    if (nulls) {
+      console.error(`${nulls} of ${features.length} regions in "${activeRegionSet.label}" have no id; ` +
+        "their ids are probably not all the same type in the GeoJSON. They cannot be classified or selected.");
+    }
+    return features.map((f) => ({
+      id: f.attributes.id,
+      name: f.attributes.n,
+      rings: f.geometry.rings,
+      extent: f.geometry.extent,
+    }));
+  })().catch((err) => {
+    regionRingsPromise = null;
+    throw err;
+  });
+  return regionRingsPromise;
+};
+
+// The windows the stepper walks, shortest first, ending at the whole record —
+// 5, 10, 15, 20, All on a 24 year record. Five year steps because a trend over
+// GRACE moves slowly enough that a shorter nudge says nothing, and the last
+// step jumps to the full span rather than stopping at an arbitrary multiple
+// short of it.
+const TREND_WINDOW_STEP = 5;
+const MS_PER_YEAR = 365.25 * 86400000;
+
+const trendWindowOptions = () => {
+  if (!timeDates?.length) return [null];
+  const span = (timeDates[timeDates.length - 1] - timeDates[0]) / MS_PER_YEAR;
+  const steps = [];
+  for (let y = TREND_WINDOW_STEP; y < span; y += TREND_WINDOW_STEP) steps.push(y);
+  steps.push(null); // the whole record, however long it happens to be
+  return steps;
+};
+
+// Set in bootMapUi: fills the window dropdown, which cannot be built until the
+// time axis is known. Held as a hook because the dropdown lives with the other
+// UI wiring and the fits below are module scope.
+let onTrendWindowsReady = () => {};
+// Likewise: the boot path starts trends through the same route the button uses.
+let startTrends = () => {};
+
+// First month index inside the trend window, and how it is described. Measured
+// back from the newest month with data rather than from today, so the label
+// still matches the data after a gap at the end of the record.
+const trendWindow = () => {
+  const last = timeDates[timeDates.length - 1];
+  if (!trendState.years) {
+    return {from: 0, label: `${timeDates[0].getFullYear()}\u2013${last.getFullYear()}`};
+  }
+  const cutoff = new Date(last);
+  cutoff.setFullYear(cutoff.getFullYear() - trendState.years);
+  const from = timeDates.findIndex((d) => d >= cutoff);
+  return {
+    from: from < 0 ? 0 : from,
+    label: `last ${trendState.years} yr`,
+  };
+};
+
+// How many cells fell in each class. Land only: a NaN slope is ocean or a cell
+// with too few months, and neither is a classification.
+const countCellCategories = (slopes) => {
+  const counts = new Map();
+  for (let i = 0; i < slopes.length; i++) {
+    const s = slopes[i];
+    if (!Number.isFinite(s)) continue;
+    const key = classify(s, TREND_THRESHOLDS).key;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+};
+
+// Shared by both modes: the region classification counts regions, the global
+// map counts cells, and the classes are the same either way.
+// The manifest, then the picker. My Regions is appended rather than listed in
+// the file: it is the user's own and has no source to name.
+const loadRegionSets = async () => {
+  const res = await fetch(REGION_SETS_URL, {cache: "no-cache"});
+  if (!res.ok) throw new Error(`Region set manifest: HTTP ${res.status}`);
+  const {sets} = await res.json();
+  if (!Array.isArray(sets) || !sets.length) throw new Error("Region set manifest lists no sets");
+  regionSets = [...sets, MY_REGIONS];
+
+  regionSetSelect.replaceChildren(
+    ...regionSets.map(({id, label}) => {
+      const option = document.createElement("option");
+      option.value = id;
+      option.textContent = label;
+      return option;
+    }),
+  );
+  regionSetSelect.value = regionSets[0].id;
+  return regionSets[0];
+};
+
+// Bounding box of a ring set, for the uploads, which have no layer to ask.
+const ringsExtent = (rings) => {
+  let xmin = Infinity, ymin = Infinity, xmax = -Infinity, ymax = -Infinity;
+  for (const ring of rings) {
+    for (const [x, y] of ring) {
+      if (x < xmin) xmin = x;
+      if (x > xmax) xmax = x;
+      if (y < ymin) ymin = y;
+      if (y > ymax) ymax = y;
     }
   }
-});
+  return {xmin, ymin, xmax, ymax};
+};
+
+const renderTrendLegend = ({varName, counts, noun, window}) => {
+  const {moderate, extreme} = TREND_THRESHOLDS;
+  trendLegendTitle.textContent = `${varName} trend (${UNITS}/yr)`;
+  trendLegendSub.textContent = `${window} · ${noun} · ±${moderate} and ±${extreme}`;
+
+  // Increase at the top, decline at the bottom: the legend reads the way the
+  // values do.
+  const ordered = [...TREND_CATEGORIES].reverse().concat(INSUFFICIENT);
+  trendLegendRows.replaceChildren(
+    ...ordered.map((cat) => {
+      const row = document.createElement("div");
+      row.className = "trend-legend-row";
+      const swatch = document.createElement("span");
+      swatch.className = "trend-legend-swatch";
+      swatch.style.background = cat.color;
+      const label = document.createElement("span");
+      label.textContent = cat.label;
+      const count = document.createElement("span");
+      count.className = "trend-legend-count";
+      count.textContent = String(counts.get(cat.key) ?? 0);
+      row.append(swatch, label, count);
+      return row;
+    }),
+  );
+};
+
+// A unique-value renderer keyed on the region id, rather than a second layer of
+// filled graphics: the geometry is already on the map and 81 symbols are
+// cheaper than 81 copies of it.
+// The uploads are graphics on their own layer rather than features with a
+// renderer, so their trend colors are set per graphic. Called wherever the
+// default symbol would otherwise be applied, so a classification survives a
+// basemap change and a reload of the list.
+const paintUploadedSymbols = () => {
+  const showingTrends = trendState.on && trendState.mode === "region";
+  for (const graphic of uploadedLayer.graphics) {
+    const id = graphic.attributes?.regionId;
+    const cat = showingTrends ? trendState.byRegion.get(id) : null;
+    if (cat) {
+      graphic.symbol = trendSymbolFor(cat, String(id) === activeRegionId, activeRegionId !== null);
+      continue;
+    }
+    // The same emphasis the published sets get: the analyzed upload keeps its
+    // green, the rest step back but stay clickable.
+    const dimmed = activeRegionId !== null && String(id) !== activeRegionId;
+    graphic.symbol = dimmed ? regionSymbolDimmed(darkBasemap) : uploadedSymbolFor(darkBasemap);
+  }
+};
+
+/**
+ * How a classified region is drawn.
+ *
+ * With nothing being analyzed the fills carry the classification and sit at full
+ * strength. Once a region is analyzed the picture has to serve two things at
+ * once, so the emphasis shifts: the analyzed region drops its fill entirely,
+ * because its anomaly cells are underneath and a 55% wash over them hid the very
+ * raster the analysis produced, and keeps its class in a heavy outline instead.
+ * The others keep their class colour at a third of the opacity — still legible
+ * as a classification, no longer competing with the cells.
+ */
+const trendSymbolFor = (cat, isActive, analyzing) => {
+  const rgb = hexToRgb(cat.color);
+  if (isActive) {
+    return {
+      type: "simple-fill",
+      color: [0, 0, 0, 0],
+      outline: {color: [...rgb, 1], width: 3},
+    };
+  }
+  return {
+    type: "simple-fill",
+    color: [...rgb, analyzing ? 0.3 : 0.55],
+    outline: {
+      color: darkBasemap ? [255, 255, 255, analyzing ? 0.25 : 0.5] : [30, 41, 59, analyzing ? 0.3 : 0.55],
+      width: 0.75,
+    },
+  };
+};
+
+const applyTrendRenderer = () => {
+  // My Regions has no features to render — its outlines are on uploadedLayer —
+  // so the classification is painted there instead. Without this the trend ran,
+  // the legend filled in, and nothing on the map changed.
+  paintUploadedSymbols();
+  const analyzing = activeRegionId !== null;
+  boundaryLayer.renderer = {
+    type: "unique-value",
+    field: "id",
+    // Unclassified regions: grey either way, fainter while one is analyzed.
+    defaultSymbol: {
+      type: "simple-fill",
+      color: [100, 116, 139, analyzing ? 0.1 : 0.18],
+      outline: {color: INSUFFICIENT.color, width: 1},
+    },
+    uniqueValueInfos: [...trendState.byRegion].map(([id, cat]) => ({
+      value: id,
+      symbol: trendSymbolFor(cat, String(id) === activeRegionId, analyzing),
+    })),
+  };
+};
+
+const hexToRgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+
+const setTrendsOff = () => {
+  trendState.on = false;
+  trendState.mode = null;
+  trendState.varName = null;
+  trendState.byRegion.clear();
+  applyRegionRenderer(); // back to plain, or to the analyzed region emphasized
+  paintUploadedSymbols(); // back to green now that byRegion is empty
+  trendLegendDiv.classList.add("hidden");
+  trendWindowField.classList.add("hidden");
+  trendsButton.setAttribute("aria-pressed", "false");
+  trendsLabel.textContent = "Analyze trends";
+  regionalSeriesHandler?.(); // drop the fitted line from a showing chart
+};
+
+// Trends belong to the view that produced them. Entering the global view drops
+// a region classification and leaving it drops the trend raster, so the button
+// never offers to hide something that is no longer on screen.
+/**
+ * Trends stay on across a view change; only the picture has to be rebuilt.
+ *
+ * The two modes draw different things — classified outlines, or a per-cell
+ * raster — so what is on screen is stale the moment the view changes. This drops
+ * the stale picture and leaves `on` set; ensureTrendsForView, called once the new
+ * view has settled, builds the other one. Turning trends off used to be the
+ * answer and meant switching to the global map silently cancelled a
+ * classification the user had asked for.
+ */
+// Drop the classification currently drawn, keeping trends on. Whatever changed
+// — the view, or which regions are on the map — made it stale, and
+// ensureTrendsForView builds the replacement once the new state has settled.
+const invalidateTrendPicture = () => {
+  trendState.mode = null;
+  trendState.varName = null;
+  trendState.byRegion.clear();
+  // The outlines go back to plain; the global raster is torn down by the caller.
+  applyRegionRenderer();
+  paintUploadedSymbols();
+};
+
+const clearTrendsOnViewChange = (entering) => {
+  if (!trendState.on || trendState.mode === entering) return;
+  invalidateTrendPicture();
+};
+
+/**
+ * Build whichever trend picture the current view needs, if trends are on and it
+ * is not already showing. Called at the end of each view's setup, so a switch
+ * carries the classification over instead of cancelling it.
+ */
+const ensureTrendsForView = () => {
+  if (!trendState.on || trendState.running) return;
+  const wanted = globalView.active ? "global" : "region";
+  if (trendState.mode === wanted) return;
+  if (wanted === "global") runGlobalTrends();
+  else runTrends();
+};
+
+// The whole-world trend map: one slope per cell, drawn through the same raster
+// renderer the animation uses. Static by nature, so the animation control goes
+// away while it is showing — there are no frames to step through.
+const runGlobalTrends = async () => {
+  const varName = displayConfig.variable;
+  trendState.running = true;
+  trendsButton.disabled = true;
+  trendsLabel.textContent = "Analyzing…";
+  globalProgressLabel.textContent = `Fitting ${varName} trends\u2026`;
+  globalProgressFill.style.width = "100%";
+  globalProgressDiv.classList.remove("hidden");
+  try {
+    await ensureTimeDates();
+    onTrendWindowsReady();
+    await ensureGlobalData(varName);
+    const {frames, nT, nLat, nLon} = globalView.byVar[varName].data;
+    // One frame of gradients out of 290 of anomalies.
+    const {from, label} = trendWindow();
+    const slopes = perCellSlopes({frames, nT, nLat, nLon, dates: timeDates, minPoints: TREND_MIN_MONTHS, from});
+    if (!globalView.active || displayConfig.variable !== varName) return;
+
+    const {latEdgeMin, cellSize} = globalView.geo[resolutionOf(varName)];
+    globalView.renderer.setStops(trendCategoryStops());
+    globalView.renderer.setGrid({frames: slopes, nT: 1, nLat, nLon, latEdgeMin, cellSize});
+    // Not this variable's animation grid any more, so re-entering the animation
+    // has to rebuild it rather than reuse what is on screen.
+    globalView.gridVar = null;
+    globalView.renderer.drawFrame(0);
+
+    timeStepHandler = null;
+    timeControl?.hide();
+    // The category legend replaces the continuous color bar: the map is five
+    // flat classes now, and a gradient would misdescribe it.
+    setLegendAvailable(false);
+    const counts = countCellCategories(slopes);
+    const classified = [...counts.values()].reduce((a, b) => a + b, 0);
+    renderTrendLegend({varName, counts, noun: `${classified.toLocaleString()} cells`, window: label});
+    trendLegendDiv.classList.remove("hidden");
+    trendWindowField.classList.remove("hidden");
+    globalProgressDiv.classList.add("hidden");
+
+    trendState.on = true;
+    trendState.mode = "global";
+    trendState.varName = varName;
+    trendsButton.setAttribute("aria-pressed", "true");
+    trendsLabel.textContent = "Hide trends";
+  } catch (err) {
+    console.error("Could not fit the global trends", err);
+    globalProgressLabel.textContent = `Could not fit ${varName} trends — see the console.`;
+    globalProgressFill.style.width = "0%";
+    trendsLabel.textContent = "Analyze trends";
+    trendsButton.setAttribute("aria-pressed", "false");
+  } finally {
+    trendState.running = false;
+    trendsButton.disabled = false;
+  }
+};
+
+const runTrends = async () => {
+  const varName = displayConfig.variable;
+  trendState.running = true;
+  trendsButton.disabled = true;
+  trendsLabel.textContent = "Analyzing…";
+  try {
+    await ensureTimeDates();
+    onTrendWindowsReady();
+    // The same frames and the same worker the global view uses, so a variable
+    // already loaded there costs nothing here.
+    const [regions, {frames, nT, nLat, nLon}, {lat, lon}] = await Promise.all([
+      ensureRegionRings(),
+      ensureGlobalData(varName).then(() => globalView.byVar[varName].data),
+      ensureCoords(resolutionOf(varName)),
+    ]);
+
+    const {from, label} = trendWindow();
+    trendState.byRegion.clear();
+    for (const region of regions) {
+      const series = regionMeanSeries({
+        rings: region.rings,
+        extent: region.extent,
+        frames, nT, nLat, nLon,
+        lat: lat.data, lon: lon.data,
+      });
+      const slope = series ? computeSlope(timeDates, series, {minPoints: TREND_MIN_MONTHS, from}) : null;
+      trendState.byRegion.set(region.id, classify(slope, TREND_THRESHOLDS));
+    }
+
+    trendState.on = true;
+    trendState.mode = "region";
+    trendState.varName = varName;
+    applyTrendRenderer();
+    const counts = new Map();
+    for (const cat of trendState.byRegion.values()) counts.set(cat.key, (counts.get(cat.key) ?? 0) + 1);
+    renderTrendLegend({varName, counts, noun: `${trendState.byRegion.size} regions`, window: label});
+    trendLegendDiv.classList.remove("hidden");
+    trendWindowField.classList.remove("hidden");
+    trendsButton.setAttribute("aria-pressed", "true");
+    trendsLabel.textContent = "Hide trends";
+    // A showing analysis picks up its fitted line, or a new one for a changed
+    // window. No-op when no region is being analyzed.
+    regionalSeriesHandler?.();
+  } catch (err) {
+    console.error("Could not classify the region trends", err);
+    setTrendsOff();
+    trendsLabel.textContent = "Trends unavailable";
+  } finally {
+    trendState.running = false;
+    trendsButton.disabled = false;
+  }
+};
+
+// ---- Picking one cell out of the whole-world raster -------------------------
+// The global view draws into a canvas rather than into features, so there is
+// nothing to hit test. The click is resolved arithmetically instead: the cell
+// whose centre is nearest the point, in that variable's own grid.
+let pickedCell = null; // {resolution, iy, ix} — kept so a variable change can re-read the same cell
+
+const cellIndexAt = (lon, lat, coords) => {
+  const nearest = (arr, v) => {
+    let best = 0;
+    for (let i = 1; i < arr.length; i++) {
+      if (Math.abs(arr[i] - v) < Math.abs(arr[best] - v)) best = i;
+    }
+    return best;
+  };
+  return {iy: nearest(coords.lat.data, lat), ix: nearest(coords.lon.data, lon)};
+};
+
+// A cell's series straight out of the frame buffer, which is time-major.
+const cellSeries = ({frames, nT, nLat, nLon}, iy, ix) => {
+  const frameSize = nLat * nLon;
+  const offset = iy * nLon + ix;
+  const out = new Float64Array(nT);
+  for (let t = 0; t < nT; t++) out[t] = frames[t * frameSize + offset];
+  return out;
+};
+
+/**
+ * One cell's uncertainty series, read straight from the store.
+ *
+ * The values come out of the whole-world frames the animation already holds,
+ * but no equivalent exists for the _unc arrays and loading one globally is 60 MB
+ * for a shaded band. Asking for one cell instead still fetches its containing
+ * chunk — the arrays are chunked [290, 50, 50], about 900 KB compressed — but
+ * that is a sixtieth of the global read, and every other cell in the same 50 x
+ * 50 block then comes from the chunk already fetched. Memoized per cell on top
+ * of that, so a variable toggled off and back on costs nothing.
+ */
+const cellUncCache = new Map();
+const cellUncertainty = async (varName, iy, ix) => {
+  const key = `${varName}|${iy}|${ix}`;
+  if (!cellUncCache.has(key)) {
+    cellUncCache.set(key, (async () => {
+      const nodes = await getVarNodes(varName);
+      if (!nodes.unc) return null; // the store has no _unc array for this one
+      const win = await get(nodes.unc, [null, {start: iy, stop: iy + 1}, {start: ix, stop: ix + 1}]);
+      return Float64Array.from(win.data);
+    })().catch((err) => {
+      cellUncCache.delete(key); // allow a retry
+      console.warn(`No uncertainty for ${varName} at this cell`, err);
+      return null;
+    }));
+  }
+  return cellUncCache.get(key);
+};
+
+const formatLatLon = (lat, lon) =>
+  `${Math.abs(lat).toFixed(2)}\u00b0${lat >= 0 ? "N" : "S"}, ${Math.abs(lon).toFixed(2)}\u00b0${lon >= 0 ? "E" : "W"}`;
+
+const clearPickedCell = () => {
+  pickedCell = null;
+  cellPickLayer.removeAll();
+};
+
+/**
+ * Plot the picked cell. Draws the same variables the series toggles ask for,
+ * each read from its own grid — TWSa is half-degree, so its cell is a different
+ * cell from GWSa's at the same click, which is the honest thing to plot.
+ */
+const plotPickedCell = async (lon, lat) => {
+  const wanted = plottedVariables();
+  const runId = ++analysisRunSeq; // a second click abandons the first
+  const series = [];
+
+  for (const varName of wanted) {
+    const resolution = resolutionOf(varName);
+    try {
+      await ensureGlobalData(varName);
+      if (runId !== analysisRunSeq) return;
+      const coords = await ensureCoords(resolution);
+      const {iy, ix} = cellIndexAt(lon, lat, coords);
+      const data = globalView.byVar[varName]?.data;
+      if (!data) continue;
+      const values = cellSeries(data, iy, ix);
+      if (!values.some(Number.isFinite)) continue; // ocean, or no data in this cell
+      const {longName} = VARIABLES[varName];
+      const color = variableColor(varName, isLight());
+      // Only the lone series can show a band, so only then is it worth reading.
+      const uncertainty = wanted.length === 1 ? await cellUncertainty(varName, iy, ix) : null;
+      if (runId !== analysisRunSeq) return;
+      const entry = {name: varName, longName, color, values, uncertainty};
+
+      if (trendState.on) {
+        const {from, label} = trendWindow();
+        const fit = computeFit(timeDates, values, {minPoints: TREND_MIN_MONTHS, from});
+        const pts = fitEndpoints(timeDates, values, fit, {from});
+        if (pts) {
+          entry.trendPoints = pts;
+          entry.trendLabel = `${varName} trend ${fit.slope >= 0 ? "+" : ""}${fit.slope.toFixed(2)} ${UNITS}/yr (${label})`;
+        }
+      }
+      series.push(entry);
+      if (varName === displayConfig.variable) {
+        // Outline the cell actually read, which is the displayed layer's — the
+        // other variables' cells may be bigger or smaller.
+        const half = (coords.lat.data[1] - coords.lat.data[0]) / 2;
+        cellPickLayer.removeAll();
+        cellPickLayer.add(new Graphic({
+          geometry: cellPolygonFromCenter({
+            xCenter: coords.lon.data[ix], yCenter: coords.lat.data[iy], halfWidth: half,
+          }),
+          symbol: {
+            type: "simple-fill",
+            color: [56, 189, 248, 0.15],
+            outline: {color: [56, 189, 248, 0.95], width: 2},
+          },
+        }));
+        pickedCell = {resolution, iy, ix, lon: coords.lon.data[ix], lat: coords.lat.data[iy]};
+      }
+    } catch (err) {
+      console.error(`Could not read ${varName} for this cell`, err);
+    }
+  }
+
+  if (runId !== analysisRunSeq) return;
+  if (!series.length) {
+    // Ocean, ice sheet, or a month range with nothing in it. Back to the prompt
+    // rather than an empty chart or a panel that shuts on you.
+    clearPickedCell();
+    clearTimeseriesPanel(GLOBAL_PROMPT);
+    setBreadcrumb("Global map", {home: false});
+    return;
+  }
+
+  panels.setChartVisible(true);
+  activeChart?.destroy();
+  activeChart = renderTimeseriesChart({
+    container: timeseriesPlotDiv,
+    dates: timeDates,
+    series,
+    units: UNITS,
+    valueLabel: VALUE_LABEL,
+    fillGaps: displayConfig.fillGaps,
+    fileStem: `grace_cell_${lat.toFixed(2)}_${lon.toFixed(2)}`,
+    getCsv: async () => {
+      const all = Object.keys(VARIABLES);
+      const cols = [];
+      for (const v of all) {
+        try {
+          await ensureGlobalData(v);
+          const coords = await ensureCoords(resolutionOf(v));
+          const {iy, ix} = cellIndexAt(lon, lat, coords);
+          const data = globalView.byVar[v]?.data;
+          if (data) {
+            cols.push({
+              name: v,
+              values: cellSeries(data, iy, ix),
+              uncertainty: await cellUncertainty(v, iy, ix),
+            });
+          }
+        } catch { /* a variable that will not load is left out of the file */ }
+      }
+      return seriesToCsv({dates: timeDates, series: cols});
+    },
+  });
+  activeChart.setMarker(timeControl?.currentDate ?? null);
+  setBreadcrumb(formatLatLon(pickedCell?.lat ?? lat, pickedCell?.lon ?? lon), {home: false});
+  // A variable toggle re-reads the same point rather than the same region.
+  regionalSeriesHandler = () => plotPickedCell(lon, lat);
+};
+
+// ---- Left panel: region list and breadcrumb --------------------------------
+// One row per region, built once from the layer's own features so the list and
+// the outlines can never disagree about what exists. Clicking a row runs the
+// same analysis clicking the polygon does.
+let regionRows = []; // {id, name, button}, in the order they are shown
+
+// The region being analyzed, or null. The map reads it to decide what to
+// emphasize, so it is module state rather than a detail of the list.
+let activeRegionId = null;
+
+const setActiveRegion = (regionId) => {
+  activeRegionId = regionId == null ? null : String(regionId);
+  for (const row of regionRows) {
+    const isActive = activeRegionId !== null && String(row.id) === activeRegionId;
+    row.button.setAttribute("aria-current", isActive ? "true" : "false");
+    if (isActive) row.button.scrollIntoView({block: "nearest"});
+  }
+  applyRegionRenderer();
+  paintUploadedSymbols();
+};
+
+// The trailing crumb names whatever is being analyzed — a region, a drawn
+// polygon, an uploaded file. Passing null leaves "Home" alone as the only crumb.
+//
+// home:false drops the "Home" crumb itself, for the global view: Home means the
+// full set of region outlines, which is not a parent of the whole-world
+// animation, so offering it there would be a trail that leads somewhere the
+// user did not come from.
+const setBreadcrumb = (label, {home = true} = {}) => {
+  breadcrumb.querySelectorAll("[data-crumb]").forEach((el) => el.remove());
+  crumbHome.hidden = !home;
+  if (!label) return;
+  const crumbs = [];
+  if (home) {
+    const sep = document.createElement("span");
+    sep.className = "rfs-crumb-sep";
+    sep.dataset.crumb = "";
+    sep.setAttribute("aria-hidden", "true");
+    sep.textContent = "›";
+    crumbs.push(sep);
+  }
+  const current = document.createElement("span");
+  current.className = "rfs-crumb-current";
+  current.dataset.crumb = "";
+  current.setAttribute("aria-current", "page");
+  current.title = label;
+  current.textContent = label;
+  crumbs.push(current);
+  breadcrumb.append(...crumbs);
+};
+
+// One row, built the same way whichever kind of region it is. `user` rows carry
+// their own geometry and a remove control; built-in rows are analyzed by id out
+// of the boundary layer.
+const activateRegionRow = (row) =>
+  row.user ? analyzeUserRegion(row) : analyzeGlobalRegion({regionId: row.id, name: row.name});
+
+const regionRowElement = (row) => {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "rfs-list-item";
+  button.textContent = row.name;
+  button.title = row.name;
+  button.setAttribute("role", "listitem");
+  button.setAttribute("aria-current", "false");
+  if (row.user) button.dataset.user = "true";
+  button.addEventListener("click", () => activateRegionRow(row));
+  if (!row.user) return {element: button, button};
+
+  // Uploads accumulate with nothing to remove them otherwise, and this is the
+  // only place they are listed.
+  const wrapper = document.createElement("div");
+  wrapper.className = "rfs-list-row";
+  const remove = document.createElement("button");
+  remove.type = "button";
+  remove.className = "rfs-list-remove";
+  remove.title = `Remove ${row.name}`;
+  remove.setAttribute("aria-label", `Remove ${row.name}`);
+  remove.textContent = "\u00d7";
+  remove.addEventListener("click", () => removeUserRegion(row.id));
+  wrapper.append(button, remove);
+  return {element: wrapper, button};
+};
+
+let builtinRows = [];
+let userRows = [];
+const paintRegionList = () => {
+  // Uploads are their own set now, so they list under My Regions rather than
+  // appended to whichever published set happens to be showing.
+  regionRows = activeRegionSet.file ? builtinRows : userRows;
+  regionList.replaceChildren(...regionRows.map((r) => r.element));
+  applyRegionFilter();
+};
+
+const buildRegionList = async () => {
+  if (!activeRegionSet.file) {
+    builtinRows = [];
+    paintRegionList();
+    return;
+  }
+  const q = boundaryLayer.createQuery();
+  q.where = "1=1";
+  q.outFields = ["id", "n"];
+  q.returnGeometry = false;
+  const {features} = await boundaryLayer.queryFeatures(q);
+
+  builtinRows = features
+    .map((f) => ({id: f.attributes.id, name: f.attributes.n}))
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map((row) => ({...row, ...regionRowElement(row)}));
+  paintRegionList();
+};
+
+// Uploaded regions, drawn and listed. Read once at boot and kept in step from
+// there; the store is the record, these are its view.
+const loadUserRegions = async () => {
+  const saved = await listUserRegions();
+  saved.sort((a, b) => a.addedAt - b.addedAt);
+  uploadedLayer.removeAll();
+  // Drawn only while their own set is showing, for the same reason they are
+  // listed only there.
+  applyOutlineVisibility();
+  userRows = saved.map((rec) => {
+    const row = {id: rec.id, name: rec.name, rings: rec.rings, user: true};
+    uploadedLayer.add(new Graphic({
+      geometry: new Polygon({rings: rec.rings, spatialReference: SpatialReference.WGS84}),
+      symbol: uploadedSymbolFor(darkBasemap),
+      attributes: {regionId: rec.id},
+    }));
+    return {...row, ...regionRowElement(row)};
+  });
+  // The uploads are the regions in My Regions, so adding or removing one
+  // changes what a classification covers.
+  regionRingsPromise = null;
+  paintUploadedSymbols();
+  paintRegionList();
+};
+
+const addUserRegion = async ({name, polygon}) => {
+  const rec = {
+    id: newUserRegionId(),
+    name,
+    // Plain arrays, so a record outlives any one SDK version.
+    rings: polygon.rings.map((ring) => ring.map(([x, y]) => [x, y])),
+    addedAt: Date.now(),
+  };
+  await putUserRegion(rec);
+  await loadUserRegions();
+  return rec;
+};
+
+const removeUserRegion = async (id) => {
+  await deleteUserRegion(id);
+  await loadUserRegions();
+};
+
+// Substring match on the name, case-insensitive. Hiding rather than rebuilding
+// keeps each row's listener and its aria-current state.
+const applyRegionFilter = () => {
+  const needle = regionFilter.value.trim().toLowerCase();
+  let shown = 0;
+  for (const row of regionRows) {
+    const match = !needle || row.name.toLowerCase().includes(needle);
+    // element, not button: an uploaded row is a wrapper around the button and
+    // its remove control, and hiding the button alone would leave the × behind.
+    row.element.hidden = !match;
+    if (match) shown++;
+  }
+  const empty = regionList.querySelector(".rfs-list-empty");
+  if (shown === 0 && !empty) {
+    const p = document.createElement("p");
+    p.className = "rfs-list-empty";
+    p.textContent = "No regions match.";
+    regionList.append(p);
+  } else if (shown > 0) {
+    empty?.remove();
+  }
+};
 
 // The native 3 degree GRACE mascon footprints (data/mascon_boundaries.py). This
 // is an interpretation aid rather than data: every half degree cell inside one
@@ -346,14 +1549,30 @@ const boundaryLayer = new GeoJSONLayer({
 // a single outline is interpolation, not measurement.
 //
 // Outline only and popups off — a popupTemplate here would swallow the clicks
-// the aquifer layer and the cell handlers rely on, and the layer has nothing to
+// the region layer and the cell handlers rely on, and the layer has nothing to
 // say that the outline itself does not.
 const masconRenderer = () => ({
   type: "simple",
   symbol: {
     type: "simple-fill",
     color: [255, 255, 255, 0],
-    outline: {color: [38, 38, 38, 0.75], width: displayConfig.masconWidth}
+    // Solid, and a color of its own. Dashes were tried and could not work here:
+    // this is a mesh of 1706 polygons that tile the globe, so every interior
+    // edge belongs to two mascons and gets stroked twice. Solid, the second pass
+    // lands invisibly on the first; dashed, each ring starts its dash pattern at
+    // its own first vertex, so the two passes fall out of phase and the shared
+    // edge comes out as ragged overlapping dashes.
+    //
+    // Hue is what separates these from the anomaly cell boundaries instead. The
+    // two grids are nested — 3 degree caps aligned to the 0.5 degree graticule —
+    // so a mascon edge always lies along a cell edge and can never be told apart
+    // by position. Fuchsia because nothing else on the map uses it: the cell
+    // borders are black or white, the regions blue or amber, a drawn polygon
+    // cyan.
+    outline: {
+      color: darkBasemap ? [240, 171, 252, 0.95] : [192, 38, 211, 0.9],
+      width: displayConfig.masconWidth,
+    },
   }
 });
 const masconLayer = new GeoJSONLayer({
@@ -370,26 +1589,26 @@ let masconLayerAdded = false;
 const applyMasconVisibility = () => {
   if (displayConfig.showMascons && !masconLayerAdded) {
     masconLayerAdded = true;
-    // Below the aquifer outlines, which stay clickable on top, and above the
+    // Below the region outlines, which stay clickable on top, and above the
     // anomaly raster, which both views insert at index 0.
     arcgisMap.map.add(masconLayer, arcgisMap.map.layers.indexOf(boundaryLayer));
   }
   masconLayer.visible = displayConfig.showMascons;
 };
 
-const analyzeGlobalAquifer = async ({aquiferId}) => {
-  // Load boundary layer + zoom
+const analyzeGlobalRegion = async ({regionId, name}) => {
+  setActiveRegion(regionId);
+  setBreadcrumb(name ?? regionRows.find((r) => String(r.id) === String(regionId))?.name ?? "Region");
   await boundaryLayer.load();
 
-  // Before adding to map (or after, either works)
-  boundaryLayer.definitionExpression = `id='${aquiferId}'`;
-  await boundaryLayer.refresh?.();
-  const boundaryExtent = await boundaryLayer.queryExtent()
-  const zoomPromise = arcgisMap.view.goTo(boundaryExtent.extent);
+  // The whole set stays drawn; setActiveRegion above has already told the
+  // renderer which one to emphasize. Filtering to the picked region is what used
+  // to leave no way to switch without going Home first.
 
-  // ---- Get the actual boundary polygon geometry ----
+  // One query for the geometry, which the analysis needs anyway; its extent is
+  // the same extent queryExtent() used to make a second round trip for.
   const q = boundaryLayer.createQuery();
-  q.where = `id='${aquiferId}'`;
+  q.where = `id='${regionId}'`;
   q.returnGeometry = true;
   q.outFields = [];
 
@@ -397,17 +1616,33 @@ const analyzeGlobalAquifer = async ({aquiferId}) => {
   if (!fs.features.length) throw new Error("No features found");
   const boundaryGeom = fs.features[0].geometry;
 
-  await main({polygon: boundaryGeom, zoomPromise});
+  // expand() rather than a bare extent: goTo takes no padding, and a tight fit
+  // puts the region's edges against the viewport edges.
+  await main({polygon: boundaryGeom, zoomTarget: boundaryGeom.extent.clone().expand(1.2)});
 }
+
+const analyzeUserRegion = async (row) => {
+  setActiveRegion(row.id);
+  setBreadcrumb(row.name);
+  const polygon = new Polygon({rings: row.rings, spatialReference: SpatialReference.WGS84});
+  // The built-in outlines stay visible: an upload does not replace them, and its
+  // own outline is already drawn on the uploaded layer.
+  drawLayer.removeAll();
+  await main({polygon, zoomTarget: polygon.extent.clone().expand(1.2)});
+};
 
 const analyzeDrawnPolygon = async ({polygon}) => {
   if (polygon.spatialReference.wkid !== 4326) {
     await shapePreservingProjectOperator.load()
     polygon = shapePreservingProjectOperator.execute(polygon, SpatialReference.WGS84);
   }
+  // A sketch is its own area of interest, so the set's outlines step aside for
+  // it — whichever layer they are on.
   boundaryLayer.visible = false;
-  const zoomPromise = arcgisMap.view.goTo(polygon.extent);
-  await main({polygon, zoomPromise});
+  uploadedLayer.visible = false;
+  setActiveRegion(null);
+  if (!breadcrumb.querySelector("[data-crumb]")) setBreadcrumb("Drawn polygon");
+  await main({polygon, zoomTarget: polygon.extent});
 }
 
 // ---- Whole-world animated view ----
@@ -429,7 +1664,6 @@ const mapLegendBar = document.getElementById("map-legend-bar");
 const mapLegendMin = document.getElementById("map-legend-min");
 const mapLegendMax = document.getElementById("map-legend-max");
 // Layer dropdown, docked under the color bar; switches both views' data.
-const variableSelectPanel = document.getElementById("variable-select-panel");
 const variableSelect = document.getElementById("variable-select");
 syncSettingsControls(); // .env -> every control, including this dropdown
 
@@ -456,18 +1690,21 @@ const globalView = {
   // frame rather than the full time series and must be replaced before the
   // time slider can drive it.
   gridVar: null,
-  geo: null,       // {cellSize, lat0, lon0, latEdgeMin}, set once coords resolve
+  // resolution -> {cellSize, lat0, lon0, latEdgeMin}. Per grid, because TWSa is
+  // read at 0.5 degree and the rest at 1.0, and the raster is georeferenced from
+  // whichever the displayed variable belongs to.
+  geo: {},
   // per-variable loads: varName -> {dataPromise, data: {frames, nT, nLat, nLon},
   // stats: {validTimeIndices, suggestedMax}}; each variable is downloaded in its
   // own worker, independently of the others and of whichever one is displayed
   byVar: {}
 };
 
-// The regional (aquifer scale) and global buttons form a mutually-exclusive
-// group: whichever mode is active shows its button pressed. exitGlobalView()
-// and analyzeGlobalView() are the single choke points for the two modes, so the
+// The regional and global buttons form a mutually-exclusive group: whichever
+// mode is active shows its button pressed. exitGlobalView() and
+// analyzeGlobalView() are the single choke points for the two modes, so the
 // indicator is flipped from there. aria-pressed is the only state carrier —
-// the .icon-btn[aria-pressed="true"] rule in style.css styles the pressed button.
+// the .rfs-btn[aria-pressed="true"] rule in style.css styles the pressed button.
 const regionalViewButton = document.querySelector("#refresh-layers");
 const globalViewButton = document.querySelector("#global-view-button");
 const setActiveViewButton = (mode) => {
@@ -477,46 +1714,38 @@ const setActiveViewButton = (mode) => {
 };
 setActiveViewButton("global"); // whole-world animation is the initial view
 
-// Route time-slider changes to whichever view is active (regional applyEdits
+// Route animation-control steps to whichever view is active (regional applyEdits
 // or global raster). A single watcher instead of one per analysis run.
 let timeStepHandler = null;
 // Set by a completed regional analysis: re-renders the map layer + chart from
 // the already-fetched data when the GWSa/TWSa toggle flips. Null while no
 // regional analysis is showing (the toggle then only updates displayConfig).
 let regionalVariableHandler = null;
+// Redraws the chart alone, for a comparison curve being toggled: the raster and
+// the color bar are unaffected by which curves the chart carries.
+let regionalSeriesHandler = null;
 // Bumped whenever any analysis (regional or global) starts or the app resets,
 // so an in-flight regional run abandons before mutating shared UI state.
 let analysisRunSeq = 0;
 // The polygon the showing regional analysis was run for, or null when none is
 // showing. Only the resolution switch reads it, to redo that analysis against
-// the other store instead of making the user re-select the aquifer.
+// the other store instead of making the user re-select the region.
 let lastAnalyzedPolygon = null;
-let sliderWatcherInstalled = false;
-const ensureSliderWatcher = () => {
-  if (sliderWatcherInstalled) return;
-  sliderWatcherInstalled = true;
-  reactiveUtils.watch(
-    () => timeSlider.widget.timeExtent,
-    (te) => {
-      const current = te?.start;
-      if (!current) return;
-      const idx = timeDates.findIndex((d) => d.getTime() === current.getTime());
-      if (idx >= 0) timeStepHandler?.(idx);
-    }
-  );
+const ensureTimeControl = () => {
+  if (timeControl) return;
+  timeControl = createTimeControl({
+    root: timeControlRoot,
+    allDates: timeDates,
+    onStep: (idx) => timeStepHandler?.(idx),
+  });
 };
 
 // keepCurrent preserves the slider position across a GWSa/TWSa toggle (the
 // whole point of toggling is comparing the two at the same month); it falls
 // back to the first date when the current one isn't in the new stop list.
-const configureTimeSlider = (dates, {keepCurrent = false} = {}) => {
-  const current = timeSlider.timeExtent?.start;
-  timeSlider.mode = "instant";
-  timeSlider.fullTimeExtent = {start: dates[0], end: dates[dates.length - 1]};
-  timeSlider.stops = {dates};
-  const start = keepCurrent && current && dates.some((d) => d.getTime() === current.getTime()) ? current : dates[0];
-  timeSlider.timeExtent = {start, end: start};
-  timeSlider.labelsVisible = true;
+const configureTimeControl = (dates, {keepCurrent = false} = {}) => {
+  ensureTimeControl();
+  timeControl.configure(dates, {keepCurrent});
 };
 
 const updateGlobalProgress = (fraction) => {
@@ -527,20 +1756,20 @@ const updateGlobalProgress = (fraction) => {
 // Both views share this small color-ramp legend, built from the current stops.
 // (MediaLayer rasters never appeared in the ArcGIS legend widget, and that
 // widget has been removed, so this is the only legend in the app.)
-const updateMapLegend = () => {
-  const stops = generateStops();
+const updateMapLegend = ({stops = generateStops(), unit = UNITS, title} = {}) => {
   const min = stops[0].value;
   const max = stops[stops.length - 1].value;
   const gradient = stops.map((s) => `${s.color} ${(((s.value - min) / (max - min)) * 100).toFixed(1)}%`).join(", ");
-  mapLegendTitle.textContent = `${VARIABLES[displayConfig.variable].longName} (${UNITS})`;
+  mapLegendTitle.textContent = title ?? `${VARIABLES[displayConfig.variable].longName} (${unit})`;
   mapLegendBar.style.background = `linear-gradient(to right, ${gradient})`;
-  mapLegendMin.textContent = `${min} ${UNITS}`;
-  mapLegendMax.textContent = `${max} ${UNITS}`;
+  mapLegendMin.textContent = `${min} ${unit}`;
+  mapLegendMax.textContent = `${max} ${unit}`;
 };
 
 const setGlobalGrid = (varName) => {
   const entry = globalView.byVar[varName];
-  const {latEdgeMin, cellSize} = globalView.geo;
+  // Georeferencing belongs to the grid the variable was read on, not to the app.
+  const {latEdgeMin, cellSize} = globalView.geo[resolutionOf(varName)];
   globalView.renderer.setGrid({...entry.data, latEdgeMin, cellSize});
   globalView.gridVar = varName;
 };
@@ -548,7 +1777,7 @@ const setGlobalGrid = (varName) => {
 // Shown in the chart area when a selected variable can't be loaded — most
 // likely one listed in the dropdown ahead of its arrays landing in the store.
 const showVariableUnavailable = (varName) => {
-  clearTimeseriesPanel(`<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-neutral-700">${VARIABLES[varName].longName} (${varName}) could not be loaded. It may not be available yet &mdash; choose another layer from the dropdown.</div>`);
+  clearTimeseriesPanel(`<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-[var(--text-faint)]">${VARIABLES[varName].longName} (${varName}) could not be loaded. It may not be available yet &mdash; choose another layer from the dropdown.</div>`);
 };
 
 // Paint a partial world sent up by a still-downloading worker. The message
@@ -559,9 +1788,10 @@ const drawGlobalPreview = (varName, zarrUrl, {frame, nLat, nLon}) => {
   // A worker started against the other resolution keeps running to finish its
   // cache entry, but its previews and progress belong to a store the map is no
   // longer showing.
-  if (zarrUrl !== activeZarrUrl()) return;
+  if (zarrUrl !== zarrUrlFor(resolutionOf(varName))) return;
   if (!globalView.active || displayConfig.variable !== varName || !globalView.renderer) return;
-  const {latEdgeMin, cellSize} = globalView.geo;
+  const {latEdgeMin, cellSize} = globalView.geo[resolutionOf(varName)] ?? {};
+  if (cellSize == null) return;
   globalView.renderer.setStops(generateStops());
   globalView.renderer.setGrid({frames: frame, nT: 1, nLat, nLon, latEdgeMin, cellSize});
   globalView.gridVar = null;
@@ -575,18 +1805,20 @@ const drawGlobalPreview = (varName, zarrUrl, {frame, nLat, nLon}) => {
 const ensureGlobalData = (varName) => {
   const entry = (globalView.byVar[varName] ??= {});
   if (!entry.dataPromise) {
-    // Pinned for the life of this load: switching resolution clears byVar, so a
-    // worker that finishes afterwards writes into an entry nothing reads, and
-    // its progress and previews are filtered out by this URL.
-    const zarrUrl = activeZarrUrl();
+    // The store follows the variable, so each worker reads the grid that
+    // variable belongs on — TWSa at 0.5 degree, the rest at 1.0. geo is kept per
+    // grid for the same reason: it georeferences the raster, and the two grids
+    // have different cell sizes and origins.
+    const resolution = resolutionOf(varName);
+    const zarrUrl = zarrUrlFor(resolution);
     entry.dataPromise = (async () => {
-      globalView.geo = await ensureGeo();
+      const geo = await ensureGeo(resolution);
+      globalView.geo = {...globalView.geo, [resolution]: geo};
       const {frames, nT, nLat, nLon, fromCache, stats} = await loadGlobalVariable({
         varName,
         zarrUrl,
-        geo: globalView.geo,
+        geo,
         onProgress: (fraction) => {
-          if (zarrUrl !== activeZarrUrl()) return;
           if (!globalView.active || displayConfig.variable !== varName) return;
           updateGlobalProgress(fraction);
         },
@@ -619,6 +1851,12 @@ const prefetchGlobalVariables = () => {
 // and slider position; entering global view from anywhere else flies home to
 // the whole world and rewinds to the first populated month.
 const analyzeGlobalView = async ({keepView = false} = {}) => {
+  setActiveRegion(null);
+  setBreadcrumb("Global map", {home: false});
+  // keepView is a variable toggle, which should re-read the same point rather
+  // than lose it; entering the view afresh starts with nothing picked.
+  if (!keepView) clearPickedCell();
+  clearTrendsOnViewChange("global");
   const runId = ++globalView.runSeq;
   analysisRunSeq++; // abandon any in-flight regional analysis
   globalView.active = true;
@@ -627,22 +1865,28 @@ const analyzeGlobalView = async ({keepView = false} = {}) => {
 
   // ---- clear any regional analysis state
   regionalVariableHandler = null;
-  sketchTool.layer.removeAll();
-  // The whole-world raster covers the map; the aquifer outlines would only
-  // clutter it, so hide them here (exitGlobalView restores them).
-  boundaryLayer.visible = false;
+  drawLayer.removeAll();
+  // The whole-world raster covers the map; the region outlines would only
+  // clutter it, so hide them here (exitGlobalView restores them). globalView
+  // .active is already true above, so this hides whichever layer is up.
+  applyOutlineVisibility();
   boundaryLayer.definitionExpression = "1=1";
   const possiblyExistingLayer = arcgisMap.map.layers.find((l) => l.title === "GRACE Anomalies");
   if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);
-  timeSlider.widget?.stop();
-  clearTimeseriesPanel();
-  panels.setChartVisible(false);
+  timeControl?.stop();
+  // Open, and saying what to do with it. Closed, nothing told the user a cell
+  // could be clicked at all; a variable toggle keeps whatever is already there.
+  if (!keepView) {
+    clearTimeseriesPanel(GLOBAL_PROMPT);
+    panels.setChartVisible(true);
+  }
 
-  const zoomPromise = keepView ? Promise.resolve() : arcgisMap.view.goTo({
-    center: MAP_CENTER,
-    zoom: MAP_ZOOM,
-  }).catch(() => {
-  });
+  // The camera waits for the chart panel just revealed above to take its space,
+  // for the reason main() does: goTo resolves its target against the viewport it
+  // was handed, so a resize mid-flight re-aims the animation.
+  const zoomPromise = keepView
+    ? Promise.resolve()
+    : afterLayout().then(() => arcgisMap.view.goTo({center: MAP_CENTER, zoom: MAP_ZOOM})).catch(() => {});
 
   if (!globalView.renderer) globalView.renderer = createGlobalRenderer({title: "GRACE Anomalies (Global)"});
   if (!arcgisMap.map.layers.includes(globalView.renderer.layer)) {
@@ -664,11 +1908,11 @@ const analyzeGlobalView = async ({keepView = false} = {}) => {
   } catch (err) {
     console.error(`Failed to load the global ${varName} dataset`, err);
     if (globalView.runSeq === runId && globalView.active) {
-      // A deployment that has not published a half degree store fails here and
-      // nowhere else, so the message names the setting that caused it.
-      globalProgressLabel.textContent = displayConfig.halfDegreeCells
-        ? `Failed to load ${VARIABLES[varName].longName} at half degree resolution. That dataset may not be published — turn off "half degree water balance cells" in settings, or choose another layer.`
-        : `Failed to load ${VARIABLES[varName].longName}. It may not be available yet — choose another layer or press the globe to retry.`;
+      // The store a variable is read from follows from the variable, so naming
+      // the grid says which one failed to publish.
+      globalProgressLabel.textContent =
+        `Failed to load ${VARIABLES[varName].longName} at ${resolutionOf(varName)} degree resolution. ` +
+        `That dataset may not be published — choose another layer, or press the globe to retry.`;
       globalProgressFill.style.width = "0%";
       // don't leave another variable's raster on screen looking like this one
       if (globalView.gridVar !== varName) {
@@ -703,75 +1947,179 @@ const analyzeGlobalView = async ({keepView = false} = {}) => {
   displayConfig.maxValue = stats.suggestedMax;
   setGlobalGrid(varName);
   globalView.renderer.setStops(generateStops());
-  globalView.renderer.setBorders({show: displayConfig.showBorders, width: displayConfig.borderWidth});
+  globalView.renderer.setBorders(globalBorderConfig());
   globalView.renderer.layer.opacity = displayConfig.opacity;
   updateMapLegend();
   setLegendAvailable(true);
 
   const validDates = stats.validTimeIndices.map((t) => timeDates[t]);
-  timeStepHandler = (idx) => globalView.renderer.drawFrame(idx);
-  ensureSliderWatcher();
-  configureTimeSlider(validDates.length ? validDates : timeDates, {keepCurrent: keepView});
-  timeSlider.playRate = GLOBAL_PLAY_RATE_MS;
-  timeSlider.loop = true; // loop when the user presses play
-  const start = timeSlider.timeExtent?.start;
+  timeStepHandler = (idx) => {
+    globalView.renderer.drawFrame(idx);
+    // A picked cell's chart is showing beneath the map, so its marker tracks the
+    // animation the same way the regional one does.
+    if (pickedCell) activeChart?.setMarker(timeDates[idx]);
+  };
+  ensureTimeControl();
+  configureTimeControl(validDates.length ? validDates : timeDates, {keepCurrent: keepView});
+  timeControl.playRate = GLOBAL_PLAY_RATE_MS;
+  timeControl.loop = true; // loop when the user presses play
+  const start = timeControl.currentDate;
   const startIdx = start ? timeDates.findIndex((d) => d.getTime() === start.getTime()) : -1;
   globalView.renderer.drawFrame(startIdx >= 0 ? startIdx : (stats.validTimeIndices[0] ?? 0));
 
   await zoomPromise;
   // Leave the animation paused on the first frame; the user starts it with the
   // time slider's play button when ready.
+  ensureTrendsForView();
 };
 
 const exitGlobalView = () => {
+  clearTrendsOnViewChange("region");
+  clearPickedCell();
   globalView.runSeq++;
   globalView.active = false;
   setActiveViewButton("regional");
   timeStepHandler = null;
-  timeSlider.widget?.stop();
-  timeSlider.playRate = REGIONAL_PLAY_RATE_MS;
-  timeSlider.loop = false;
+  timeControl?.stop();
+  if (timeControl) {
+    timeControl.playRate = REGIONAL_PLAY_RATE_MS;
+    timeControl.loop = false;
+  }
   if (globalView.renderer) {
     globalView.renderer.clear();
     arcgisMap.map.layers.remove(globalView.renderer.layer);
   }
   // Undo the global-view state changes; callers (main/resetLayers) re-show the
-  // shared legend when a regional layer takes over.
-  boundaryLayer.visible = true;
+  // shared legend when a regional layer takes over. My Regions has no outlines
+  // to restore — its layer carries no file.
+  applyOutlineVisibility();
   globalProgressDiv.classList.add("hidden");
   setLegendAvailable(false);
   panels.setChartVisible(true);
 };
 
-const main = async ({polygon, zoomPromise}) => {
+const main = async ({polygon, zoomTarget}) => {
   exitGlobalView();
+
+  // The camera goes first, and everything below waits for it to have *started*.
+  //
+  // Two constraints pull against each other. It cannot start before the chart
+  // panel exitGlobalView just revealed has taken its space, because goTo
+  // resolves its target against the viewport it was handed and a mid-flight
+  // resize re-aims the animation. But the wait for that layout is two animation
+  // frames, and animation frames do not fire while the main thread is busy —
+  // so anything started before the wait pushes the camera out behind it. The
+  // reads below decompress zarr chunks synchronously (blosc/zstd through WASM),
+  // which is exactly that kind of busy, and is why the zoom used to sit still
+  // for a second or more after a click.
+  //
+  // Awaiting the layout here, before any of that work exists, keeps the wait to
+  // the two frames it is supposed to be.
+  let zoomPromise = Promise.resolve();
+  if (zoomTarget) {
+    await afterLayout();
+    // A camera the user interrupts by panning is not a failed analysis, so a
+    // rejected goTo is swallowed rather than thrown out of the await below.
+    zoomPromise = arcgisMap.view.goTo(zoomTarget).catch(() => {});
+  }
+
   // Remembered so a resolution switch can re-run this same region against the
   // other store; cleared by resetLayers, which throws the analysis away.
   lastAnalyzedPolygon = polygon;
   const runId = ++analysisRunSeq;
   regionalVariableHandler = null; // reinstalled once this run's data is ready
+  regionalSeriesHandler = null;
   await ensureTimeDates();
-  const {lat, lon} = await ensureCoords();
   await arcgisMap.map.when();
   await arcgisMap.view.when();
-  const cellSize = lat.data[1] - lat.data[0]; // ~0.25
-  const HALF = cellSize / 2;
+  if (!geodeticAreaOperator.isLoaded()) await geodeticAreaOperator.load();
+  intersectionOperator.accelerateGeometry(polygon);
 
-  // ---- Identify cells in the bounding box of the polygon to read zarr values for and start the async reads which we can wait for later
-  const filteredLats = lat.data.filter((y) => y >= polygon.extent.ymin - 2 * cellSize && y <= polygon.extent.ymax + 2 * cellSize);
-  const filteredLons = lon.data.filter((x) => x >= polygon.extent.xmin - 2 * cellSize && x <= polygon.extent.xmax + 2 * cellSize);
-  const yStart = lat.data.indexOf(filteredLats[0]);
-  const yStop = lat.data.indexOf(filteredLats[filteredLats.length - 1]) + 1;
-  const xStart = lon.data.indexOf(filteredLons[0]);
-  const xStop = lon.data.indexOf(filteredLons[filteredLons.length - 1]) + 1;
-  // Reads are lazy per variable: the displayed one starts downloading now
-  // (overlapping the geometry work below); the others are fetched only when
-  // first selected, then memoized so toggling back is instant.
-  const readWindow = [null, {start: yStart, stop: yStop}, {start: xStart, stop: xStop}];
+  // Cells whose overlap with the region is below this are neither drawn nor
+  // averaged: a sliver of a cell is mostly somewhere else.
+  const displayThreshold = 0.35;
+
+  // Everything below is per grid, not per analysis. TWSa is read at 0.5 degree
+  // and every other variable at 1.0 (VARIABLES in settings.js), so a chart
+  // comparing them needs both, and nothing about one transfers to the other —
+  // different cell geometry, different read window, different overlap weights.
+  //
+  // Split in two because the halves cost very different amounts. The read
+  // window needs only the coordinate arrays, so the download can start while
+  // the expensive part runs; the cell intersection is thousands of WASM calls.
+
+  const windows = {};
+  const windowFor = (resolution) => {
+    windows[resolution] ??= ensureCoords(resolution).then(({lat, lon}) => {
+      const cellSize = lat.data[1] - lat.data[0];
+      const filteredLats = lat.data.filter((y) => y >= polygon.extent.ymin - 2 * cellSize && y <= polygon.extent.ymax + 2 * cellSize);
+      const filteredLons = lon.data.filter((x) => x >= polygon.extent.xmin - 2 * cellSize && x <= polygon.extent.xmax + 2 * cellSize);
+      const yStart = lat.data.indexOf(filteredLats[0]);
+      const yStop = lat.data.indexOf(filteredLats[filteredLats.length - 1]) + 1;
+      const xStart = lon.data.indexOf(filteredLons[0]);
+      const xStop = lon.data.indexOf(filteredLons[filteredLons.length - 1]) + 1;
+      return {
+        cellSize,
+        filteredLats,
+        filteredLons,
+        readWindow: [null, {start: yStart, stop: yStop}, {start: xStart, stop: xStop}],
+      };
+    });
+    return windows[resolution];
+  };
+
+  // Null when a newer analysis took over while this was building: the loop
+  // yields, so that can happen part way through. Every caller checks.
+  const grids = {};
+  const gridFor = async (resolution) => {
+    if (grids[resolution]) return grids[resolution];
+    const {cellSize, filteredLats, filteredLons, readWindow} = await windowFor(resolution);
+    if (runId !== analysisRunSeq) return null;
+    const HALF = cellSize / 2;
+
+    // Three or four WASM geometry calls per cell, over every cell in the
+    // region's bounding box — a second or more of uninterrupted synchronous
+    // work on a large region. That is what froze the map mid-zoom: the camera
+    // was animating, but no frame could be painted until the loop finished, so
+    // the view sat still and then snapped to its destination.
+    //
+    // Slicing by elapsed time rather than by a cell count keeps the pause
+    // bounded whatever the cell size and however fast the machine is. The check
+    // sits in the outer loop so it stays off the hot path.
+    const intersectingCells = [];
+    let sliceStart = performance.now();
+    for (const y of filteredLats) {
+      for (const x of filteredLons) {
+        const cell = cellPolygonFromCenter({xCenter: x, yCenter: y, halfWidth: HALF});
+        const cellArea = geodeticAreaOperator.execute(cell);
+        const intersectsGeom = intersectionOperator.execute(polygon, cell);
+        const intersectArea = intersectsGeom ? geodeticAreaOperator.execute(intersectsGeom) : 0;
+        const frac = intersectArea / cellArea;
+        intersectingCells.push({lon: x, lat: y, frac, cell, intersects: !!intersectsGeom, overlapArea: intersectArea});
+      }
+      if (performance.now() - sliceStart > SLICE_MS) {
+        await yieldToBrowser();
+        if (runId !== analysisRunSeq) return null;
+        sliceStart = performance.now();
+      }
+    }
+
+    const validCellIndices = intersectingCells
+      .map((cell, idx) => (cell.intersects && cell.frac >= displayThreshold) ? idx : -1)
+      .filter((idx) => idx !== -1);
+
+    grids[resolution] = {resolution, cellSize, intersectingCells, validCellIndices};
+    return grids[resolution];
+  };
+
+  // Reads are lazy per variable: the displayed one starts downloading now, over
+  // the top of the cell intersection below, and the others are fetched only
+  // when first selected, then memoized so toggling back is instant. The window
+  // comes from that variable's own grid.
   const varReads = {};
   const startVarRead = (varName) => {
-    varReads[varName] ??= getVarNodes(varName)
-      .then((nodes) => Promise.all([
+    varReads[varName] ??= Promise.all([windowFor(resolutionOf(varName)), getVarNodes(varName)])
+      .then(([{readWindow}, nodes]) => Promise.all([
         get(nodes.value, readWindow).then((raw) => maskFill(nodes.value, raw)), // int16 sentinel -> NaN
         nodes.unc ? get(nodes.unc, readWindow) : null,                          // float, already NaN-filled
       ]))
@@ -781,28 +2129,7 @@ const main = async ({polygon, zoomPromise}) => {
       });
     return varReads[varName];
   };
-  startVarRead(displayConfig.variable);
-
-  // ---- Find the overlapping areas of the cells with the polygon ----
-  if (!geodeticAreaOperator.isLoaded()) await geodeticAreaOperator.load();
-  intersectionOperator.accelerateGeometry(polygon);
-  const intersectingCells = [];
-  for (const y of filteredLats) {
-    for (const x of filteredLons) {
-      const cell = cellPolygonFromCenter({xCenter: x, yCenter: y, halfWidth: HALF});
-      const cellArea = geodeticAreaOperator.execute(cell);
-      const intersectsGeom = intersectionOperator.execute(polygon, cell);
-      const intersectArea = intersectsGeom ? geodeticAreaOperator.execute(intersectsGeom) : 0;
-      const frac = intersectArea / cellArea;
-      intersectingCells.push({lon: x, lat: y, frac, cell, intersects: !!intersectsGeom, overlapArea: intersectArea});
-    }
-  }
-
-  // Get indices of cells that pass the display threshold (frac >= 0.35)
-  const displayThreshold = 0.35;
-  const validCellIndices = intersectingCells
-    .map((cell, idx) => (cell.intersects && cell.frac >= displayThreshold) ? idx : -1)
-    .filter(idx => idx !== -1);
+  startVarRead(displayConfig.variable).catch(() => {}); // rethrown where it is awaited
 
   // Calculate max absolute value only for displayed cells
   const findMaxAbsForValidCells = (data, shape, stride, validIndices) => {
@@ -843,8 +2170,12 @@ const main = async ({polygon, zoomPromise}) => {
   };
   // ---- Per-variable derived data, computed once that variable's read resolves
   const varData = {};
+  // Null when a newer analysis took over while this was loading.
   const loadVarData = async (varName) => {
     if (varData[varName]) return varData[varName];
+    const grid = await gridFor(resolutionOf(varName));
+    if (!grid) return null;
+    const {intersectingCells, validCellIndices} = grid;
     const [values, unc] = await startVarRead(varName);
     const meanSeries = weightedMeanTimeSeries(values.data, values.shape, values.stride, intersectingCells, validCellIndices);
     // Time steps where the selection actually has data. GRACE has missing months
@@ -857,6 +2188,40 @@ const main = async ({polygon, zoomPromise}) => {
     varData[varName] = {
       values,
       meanSeries,
+      // The band is the per-cell sigma averaged the same way the values are,
+      // which is the formula for errors that are perfectly correlated across the
+      // region — every cell wrong in the same direction at once. That is
+      // deliberate, and for most regions it is also exact: the 0.5 degree cells
+      // inside one 3 degree mascon are downsampled from a single GRACE estimate,
+      // so their errors are identical by construction. 49 of the 81 shipped
+      // regions fit inside a single mascon and the median spans 0.6 of one.
+      //
+      // Treating cells as independent instead (quadrature, shrinking as 1/sqrt n)
+      // was considered and rejected: it would be wrong within a mascon, where
+      // the cells carry one estimate copied.
+      //
+      // Doing it properly (correlated within a mascon, independent across) needs
+      // a mascon id per cell, and measuring it first showed it is not worth the
+      // data change: only five regions span enough mascons to matter, and GWSa
+      // barely moves even there. Median per-cell sigma read from the 1.0 degree
+      // store, in cm:
+      //
+      //     chunk                TWSa   SMa   SWEa   GWSa
+      //     tropical S. America  3.85  4.44   0.00   6.21
+      //     arid Africa          1.57  1.17   0.00   2.17
+      //     snowy N. America     2.51  4.54   5.22  11.29
+      //
+      // GRACE is never the dominant term — GLDAS inter-model spread equals or
+      // exceeds it everywhere — and only the GRACE term would narrow, so GWSa's
+      // band on the largest region (Great Artesian, ~16 mascons) would reach 77%
+      // of its current width in the tropics and 94% in snow. TWSa alone would
+      // reach 25%, which is the only visible win.
+      //
+      // So the band being wide is mostly GLDAS models disagreeing with each
+      // other (data/main.py computes SWEa_unc/SMa_unc/CANa_unc as the standard
+      // deviation across Noah, VIC and CLSM, and GWSa_unc sums all four in
+      // quadrature). Narrowing it is a question about those models, not about
+      // this aggregation.
       uncMeanSeries: unc ? weightedMeanTimeSeries(unc.data, unc.shape, unc.stride, intersectingCells, validCellIndices) : null,
       // Color scale bound for this variable's displayed cells
       maxValue: Math.ceil(findMaxAbsForValidCells(values.data, values.shape, values.stride, validCellIndices)) || 30,
@@ -866,46 +2231,81 @@ const main = async ({polygon, zoomPromise}) => {
       // variable in the store, not a failed fetch. renderVariable says so rather
       // than drawing an empty chart over uncolored cells.
       hasData: validTimeIndices.length > 0,
+      // The raster indexes `values` by position in this grid's window, so the
+      // two travel together.
+      grid,
     };
     return varData[varName];
   };
 
-  // Generate the timeseries plot for the displayed variable (re-run on toggle)
-  const plotTimeseries = () => {
-    const varName = displayConfig.variable;
-    const {short, longName} = VARIABLES[varName];
+  const seriesFor = (varName) => {
+    const {longName} = VARIABLES[varName];
+    const color = variableColor(varName, isLight());
     const d = varData[varName];
+    const entry = {
+      name: varName,
+      longName,
+      color,
+      values: d.meanSeries,
+      uncertainty: d.uncMeanSeries, // null when the store has no <var>_unc array
+    };
+
+    // While the region classification is showing, each plotted series carries
+    // the fit behind it — the same least-squares line over the same window that
+    // decided the region's color, so the chart shows the reasoning rather than
+    // just the verdict. Fitted on this region's exact area-weighted mean, where
+    // the classification used the cheaper whole-world approximation, so the two
+    // can differ slightly; this is the more accurate of the two.
+    if (trendState.on && trendState.mode === "region") {
+      const {from, label} = trendWindow();
+      const fit = computeFit(timeDates, d.meanSeries, {minPoints: TREND_MIN_MONTHS, from});
+      const trendPoints = fitEndpoints(timeDates, d.meanSeries, fit, {from});
+      if (trendPoints) {
+        entry.trendPoints = trendPoints;
+        entry.trendLabel = `${varName} trend ${fit.slope >= 0 ? "+" : ""}${fit.slope.toFixed(2)} ${UNITS}/yr (${label})`;
+      }
+    }
+    return entry;
+  };
+
+  // Draw the displayed layer plus whatever comparisons are toggled on. Each is
+  // loaded on demand and memoized for this analysis, so a variable toggled off
+  // and on again costs nothing the second time.
+  const plotTimeseries = async () => {
+    const wanted = plottedVariables();
+    const runId = analysisRunSeq;
+    await Promise.all(wanted.map((v) => loadVarData(v).catch((err) => {
+      // One comparison that cannot be read should not take the chart down with
+      // it; it is dropped below and the rest are drawn.
+      console.error(`Could not load the ${v} time series`, err);
+    })));
+    if (runId !== analysisRunSeq) return; // a newer analysis or reset took over
+
+    const series = wanted.filter((v) => varData[v]?.hasData).map(seriesFor);
+    if (!series.length) return;
     activeChart?.destroy();
     activeChart = renderTimeseriesChart({
       container: timeseriesPlotDiv,
       dates: timeDates,
-      values: d.meanSeries,
-      uncertainty: d.uncMeanSeries, // null when the store has no <var>_unc array
-      name: short,
-      longName,
+      series,
       units: UNITS,
       valueLabel: VALUE_LABEL,
-      fileStem: `grace_${varName.toLowerCase()}`,
+      fillGaps: displayConfig.fillGaps,
+      fileStem: `grace_${displayConfig.variable.toLowerCase()}`,
+      // Every variable, not only the plotted ones: a file whose columns depend
+      // on what happened to be toggled is a poor record of the region. The ones
+      // never plotted are read here, on the first download that needs them.
+      getCsv: async () => {
+        const all = Object.keys(VARIABLES);
+        await Promise.all(all.map((v) => loadVarData(v).catch(() => null)));
+        return seriesToCsv({
+          dates: timeDates,
+          series: all.filter((v) => varData[v]?.hasData).map(seriesFor),
+        });
+      },
     });
+    activeChart.setMarker(timeControl?.currentDate ?? null);
   };
-
-  // ---- Create the cell source; `anomaly` carries whichever variable is displayed ----
-  const cellSource = intersectingCells
-    .map(({lon, lat, frac, cell, intersects}, idx) => {
-      if (!intersects || frac < displayThreshold) return null;
-      return new Graphic({
-        geometry: cell,
-        attributes: {
-          oid: idx,
-          idx,
-          lon,
-          lat,
-          frac,
-          anomaly: 0
-        }
-      });
-    })
-    .filter(Boolean);
 
   const cellFields = [
     {name: "oid", type: "oid"},
@@ -922,8 +2322,11 @@ const main = async ({polygon, zoomPromise}) => {
       type: "simple",
       symbol: {
         type: "simple-fill",
+        // Black over a pale basemap, white over imagery, for the same reason
+        // the region outlines switch. The mascon outlines take a hue of their
+        // own so the two grids stay apart where their edges coincide.
         outline: displayConfig.showBorders
-          ? {color: [0, 0, 0, 1], width: displayConfig.borderWidth}
+          ? {color: darkBasemap ? [255, 255, 255, 0.85] : [0, 0, 0, 1], width: displayConfig.borderWidth}
           : {color: [0, 0, 0, 0], width: 0}
       },
       visualVariables: [{
@@ -938,61 +2341,91 @@ const main = async ({polygon, zoomPromise}) => {
     };
   };
 
-  const anomalyLayer = new FeatureLayer({
-    title: "GRACE Anomalies",
-    source: cellSource,
-    objectIdField: "oid",
-    fields: cellFields,
-    geometryType: "polygon",
-    spatialReference: SpatialReference.WGS84,
-    renderer: createRenderer("anomaly"),
-    opacity: displayConfig.opacity,
-    visible: true
-  });
+  // The raster is drawn on the displayed layer's grid, so switching to a layer
+  // on the other grid rebuilds it — the cells are a different size and there are
+  // four times as many of them. Only TWSa sits at 0.5 degree, so that is the one
+  // switch that pays for a rebuild; moving between the 1.0 degree variables
+  // reuses what is already there.
+  let raster = null;
+  const buildRaster = (grid) => {
+    const cellSource = grid.intersectingCells
+      .map(({lon, lat, frac, cell, intersects}, idx) => {
+        if (!intersects || frac < displayThreshold) return null;
+        return new Graphic({
+          geometry: cell,
+          attributes: {oid: idx, idx, lon, lat, frac, anomaly: 0},
+        });
+      })
+      .filter(Boolean);
 
-  // Remove existing anomaly layer if present and add new one
-  const possiblyExistingLayer = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
-  if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);
-  await zoomPromise;
-  if (runId !== analysisRunSeq) return; // a newer analysis or reset took over
-  arcgisMap.map.layers.add(anomalyLayer, 0);
+    const layer = new FeatureLayer({
+      title: "GRACE Anomalies",
+      source: cellSource,
+      objectIdField: "oid",
+      fields: cellFields,
+      geometryType: "polygon",
+      spatialReference: SpatialReference.WGS84,
+      renderer: createRenderer("anomaly"),
+      opacity: displayConfig.opacity,
+      visible: true
+    });
 
-  // ---- precompute lookup from feature idx -> oid ----
-  const oids = cellSource.map(g => g.attributes.oid);
-  const idxs = cellSource.map(g => g.attributes.idx);
+    const existing = arcgisMap.map.layers.find((l) => l.title === "GRACE Anomalies");
+    if (existing) arcgisMap.map.layers.remove(existing);
+    arcgisMap.map.layers.add(layer, 0);
+
+    return {
+      resolution: grid.resolution,
+      layer,
+      // idx -> oid lookup, precomputed for the per-step edits below
+      oids: cellSource.map((g) => g.attributes.oid),
+      idxs: cellSource.map((g) => g.attributes.idx),
+      count: cellSource.length,
+    };
+  };
+
+  const ensureRaster = (grid) => {
+    if (raster?.resolution !== grid.resolution) raster = buildRaster(grid);
+    return raster;
+  };
 
   // ---- make updates serial so slider scrubbing doesn't overlap edits ----
   let editsInFlight = Promise.resolve();
 
   const updateMapToTimeStep = (timeStep) => {
     editsInFlight = editsInFlight.then(async () => {
-      const {values} = varData[displayConfig.variable] ?? {};
-      if (!values) return; // displayed variable failed to load
+      const d = varData[displayConfig.variable];
+      if (!d?.values) return; // displayed variable failed to load
+      // The indices below address this variable's own window, so a raster built
+      // for the other grid cannot be edited from it. renderVariable installs the
+      // right one; this is the guard for an edit already queued when it changed.
+      if (raster?.resolution !== d.grid.resolution) return;
+      const {values} = d;
       const nLon = values.shape[2];
       const nLat = values.shape[1];
       const base = timeStep * nLat * nLon;
 
       // Build update array with the displayed variable's value for each cell
-      const updateFeatures = new Array(cellSource.length);
-      for (let i = 0; i < cellSource.length; i++) {
-        const idx = idxs[i];
+      const updateFeatures = new Array(raster.count);
+      for (let i = 0; i < raster.count; i++) {
+        const idx = raster.idxs[i];
         updateFeatures[i] = new Graphic({
           attributes: {
-            oid: oids[i],
+            oid: raster.oids[i],
             anomaly: values.data[base + idx]
           }
         });
       }
 
-      await anomalyLayer.applyEdits({updateFeatures});
+      await raster.layer.applyEdits({updateFeatures});
 
       activeChart?.setMarker(timeDates[timeStep]);
     }).catch(console.error);
   };
 
-  // update the timeSlider web component — stops only on dates that have data
+  // update the animation control — stops only on dates that have data
   timeStepHandler = updateMapToTimeStep;
-  ensureSliderWatcher();
+  ensureTimeControl();
 
   // Render the displayed variable: load (or reuse) its window, then restyle
   // the layer, chart, legend, and slider. Used for both the initial draw and
@@ -1001,7 +2434,7 @@ const main = async ({polygon, zoomPromise}) => {
   const renderVariable = async ({keepSlider}) => {
     const varName = displayConfig.variable;
     if (!varData[varName]) {
-      clearTimeseriesPanel(`<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-neutral-700">Loading ${VARIABLES[varName].longName}&hellip;</div>`);
+      clearTimeseriesPanel(`<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-[var(--text-faint)]">Loading ${VARIABLES[varName].longName}&hellip;</div>`);
     }
     let d;
     try {
@@ -1009,85 +2442,82 @@ const main = async ({polygon, zoomPromise}) => {
     } catch (err) {
       console.error(`Failed to load ${varName} for this region`, err);
       if (runId !== analysisRunSeq || displayConfig.variable !== varName) return;
-      anomalyLayer.visible = false;
+      if (raster) raster.layer.visible = false;
       setLegendAvailable(false);
       showVariableUnavailable(varName);
       return;
     }
-    if (runId !== analysisRunSeq || displayConfig.variable !== varName) return; // stale toggle or analysis
+    // d is null when a newer analysis took over while the grid was building.
+    if (!d || runId !== analysisRunSeq || displayConfig.variable !== varName) return;
     // Read fine, but the variable is empty in this store (see hasData). Drawing
     // uncolored cells under a pointless chart would look like a broken render.
     if (!d.hasData) {
       console.warn(`${varName} read successfully for this region but contains no data — every value is a fill value`);
-      anomalyLayer.visible = false;
+      if (raster) raster.layer.visible = false;
       setLegendAvailable(false);
-      clearTimeseriesPanel(`<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-neutral-700">${VARIABLES[varName].longName} (${varName}) has no data in this dataset &mdash; choose another layer.</div>`);
+      clearTimeseriesPanel(`<div class="flex h-full w-full items-center justify-center px-8 text-center text-2xl font-bold text-[var(--text-faint)]">${VARIABLES[varName].longName} (${varName}) has no data in this dataset &mdash; choose another layer.</div>`);
       return;
     }
     displayConfig.maxValue = d.maxValue;
-    anomalyLayer.renderer = createRenderer("anomaly");
-    anomalyLayer.visible = true;
+    // Installs a new raster when this variable sits on the other grid.
+    ensureRaster(d.grid);
+    raster.layer.renderer = createRenderer("anomaly");
+    raster.layer.visible = true;
     updateMapLegend();
     setLegendAvailable(true);
     plotTimeseries();
-    configureTimeSlider(d.sliderDates, {keepCurrent: keepSlider});
-    const start = timeSlider.timeExtent?.start;
+    configureTimeControl(d.sliderDates, {keepCurrent: keepSlider});
+    const start = timeControl.currentDate;
     const idx = start ? timeDates.findIndex((dd) => dd.getTime() === start.getTime()) : -1;
     updateMapToTimeStep(idx >= 0 ? idx : d.firstValidStep);
   };
 
   regionalVariableHandler = () => renderVariable({keepSlider: true});
+  regionalSeriesHandler = () => plotTimeseries();
 
-  // initial draw
+  // initial draw. The camera is awaited here rather than around the raster's
+  // creation, which is now deferred into renderVariable.
+  await zoomPromise;
+  if (runId !== analysisRunSeq) return; // a newer analysis or reset took over
   await renderVariable({keepSlider: false});
+  // Analyzing a region from the global map lands here, so the classification is
+  // rebuilt for the view it arrived in.
+  ensureTrendsForView();
 }
+
+/**
+ * Take back down everything an analysis put on the screen: the anomaly raster,
+ * the chart, the animation control, and the handlers that redraw them.
+ *
+ * Its own function because two things need it and only one used to do it. Home
+ * cleared an analysis; switching region sets did not, so the previous set's
+ * raster stayed on the map under the new set's outlines with its time series
+ * still in the panel.
+ */
+const clearAnalysis = () => {
+  analysisRunSeq++; // abandon any in-flight regional analysis
+  regionalVariableHandler = null;
+  regionalSeriesHandler = null;
+  lastAnalyzedPolygon = null;
+  drawLayer.removeAll(); // the sketch is scratch; uploadedLayer is not touched
+  timeControl?.hide();
+  clearTimeseriesPanel(appInstructions);
+  const anomalyLayer = arcgisMap.map?.layers?.find((l) => l.title === "GRACE Anomalies");
+  if (anomalyLayer) arcgisMap.map.layers.remove(anomalyLayer);
+};
 
 const resetLayers = () => {
   exitGlobalView();
-  analysisRunSeq++; // abandon any in-flight regional analysis
-  regionalVariableHandler = null;
-  lastAnalyzedPolygon = null;
-  sketchTool.layer.removeAll();
-  boundaryLayer.visible = true;
+  setActiveRegion(null);
+  setBreadcrumb(null);
+  clearAnalysis();
+  applyOutlineVisibility();
   boundaryLayer.definitionExpression = "1=1"; // reset to none selected
-  arcgisMap.view.goTo(boundaryLayer.fullExtent);
-  timeSlider.widget?.stop();
-  clearTimeseriesPanel(appInstructions);
-  const possiblyExistingLayer = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
-  if (possiblyExistingLayer) arcgisMap.map.layers.remove(possiblyExistingLayer);
+  // The same fit the set picker uses: boundaryLayer.fullExtent is the whole
+  // world for a fileless set, which sent Home past the globe.
+  fitRegionSet();
+  ensureTrendsForView(); // coming back from the global map rebuilds the classification
 }
-
-// Switch between the 1.0 and 0.5 degree stores. Every memoized read in this
-// module belongs to the store it came from — the coordinate arrays, the time
-// axis, the opened variable nodes, and each variable's whole-world frames — so
-// all of them are dropped together and whichever view is showing reloads itself.
-// Nothing is deleted from IndexedDB: its keys already carry the store URL, so a
-// switch back to a resolution that was loaded once is served from the cache.
-const setHalfDegreeCells = (enabled) => {
-  if (displayConfig.halfDegreeCells === enabled) return;
-  displayConfig.halfDegreeCells = enabled;
-
-  coordsPromise = null;
-  geoPromise = null;
-  timeDates = null;
-  timeDatesPromise = null;
-  for (const varName of Object.keys(varNodePromises)) delete varNodePromises[varName];
-  globalView.byVar = {};
-  globalView.gridVar = null;
-  globalView.geo = null;
-  globalView.renderer?.clear();
-
-  prefetchGlobalVariables();
-
-  if (globalView.active) {
-    analyzeGlobalView({keepView: true});
-  } else if (lastAnalyzedPolygon) {
-    // Same region, other store. The camera is already there, hence no zoom.
-    main({polygon: lastAnalyzedPolygon, zoomPromise: Promise.resolve()})
-      .catch((err) => console.error("Failed to re-run the analysis at the new resolution", err));
-  }
-  // Neither view showing (the instructions panel): the next analysis picks it up.
-};
 
 // Build a custom set of zoom levels (LODs) at half-step increments. The default
 // Web Mercator scheme halves the scale every level, so the jump from the most
@@ -1130,10 +2560,6 @@ const bootMapUi = async () => {
   // before the swap would silently double it (each old level is two new ones).
   arcgisMap.view.goTo({center: MAP_CENTER, zoom: MAP_ZOOM}, {animate: false}).catch(() => {
   });
-  arcgisMap.map.add(boundaryLayer);
-  // Preload the boundaries for later regional use; the camera is set by whichever
-  // view we start in (global by default), so don't fit to the boundary extent here.
-  boundaryLayer.load();
   // Honors VITE_SETTINGS_SHOW_MASCONS; a no-op unless the deployment starts with
   // the footprints on.
   applyMasconVisibility();
@@ -1142,11 +2568,220 @@ const bootMapUi = async () => {
   // order: top-right holds the drawing tools, then the load-progress bar, the
   // shared color bar, and the layer dropdown beneath it; the compact time
   // slider sits bottom-left.
-  arcgisMap.view.ui.add(sketchTool, "top-right");
+  arcgisMap.view.ui.add(trendLegendDiv, "top-right");
+  arcgisMap.view.ui.add(zoomControl, "top-left");
+  arcgisMap.view.ui.add(basemapControl, "top-left");
+  arcgisMap.view.ui.add(drawControl, "top-right");
+
+  // ---- Zoom ----
+  // One LOD per press, which is half a conventional zoom level under the
+  // halfZoomLODs constraint set above — the same step <arcgis-zoom> took.
+  const stepZoom = (delta) => {
+    arcgisMap.view.goTo({zoom: arcgisMap.view.zoom + delta}).catch(() => {});
+  };
+  zoomInButton.addEventListener("click", () => stepZoom(1));
+  zoomOutButton.addEventListener("click", () => stepZoom(-1));
+
+  // Grey the button out at the ends of the LOD range rather than leaving a
+  // press that does nothing.
+  const syncZoomButtons = () => {
+    const {zoom} = arcgisMap.view;
+    zoomInButton.disabled = zoom >= halfZoomLODs.length - 1;
+    zoomOutButton.disabled = zoom <= 0;
+  };
+  reactiveUtils.watch(() => arcgisMap.view.zoom, syncZoomButtons);
+  syncZoomButtons();
+
+  // ---- Basemap ----
+  const basemapButtons = BASEMAPS.map(({id, label}) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.role = "menuitem";
+    button.textContent = label;
+    button.dataset.basemap = id;
+    button.addEventListener("click", () => {
+      arcgisMap.basemap = id;
+      applyBasemapContrast(id);
+      markCurrentBasemap(id);
+      closeBasemapMenu();
+    });
+    return button;
+  });
+  basemapMenu.replaceChildren(...basemapButtons);
+
+  function markCurrentBasemap(id) {
+    for (const button of basemapButtons) {
+      button.setAttribute("aria-current", String(button.dataset.basemap === id));
+    }
+  }
+
+  function closeBasemapMenu() {
+    basemapMenu.hidden = true;
+    basemapButton.setAttribute("aria-expanded", "false");
+  }
+
+  markCurrentBasemap(MAP_BASEMAP);
+
+  basemapButton.addEventListener("click", () => {
+    const opening = basemapMenu.hidden;
+    basemapMenu.hidden = !opening;
+    basemapButton.setAttribute("aria-expanded", String(opening));
+  });
+
+  // Dismiss on a click anywhere else. composedPath rather than contains():
+  // view.ui.add moved this control into the map's shadow DOM, so a document
+  // listener sees the <arcgis-map> host as the target, never the menu itself.
+  document.addEventListener("click", (e) => {
+    if (!basemapMenu.hidden && !e.composedPath().includes(basemapControl)) closeBasemapMenu();
+  });
+  arcgisMap.view.on("click", () => closeBasemapMenu());
   arcgisMap.view.ui.add(globalProgressDiv, "top-right");
   arcgisMap.view.ui.add(mapLegendDiv, "top-right");
-  arcgisMap.view.ui.add(variableSelectPanel, "top-right");
-  arcgisMap.view.ui.add(timeSlider, "bottom-left");
+
+  // Clicking a region analyzes it, replacing the popup's single button. The
+  // sketch tool owns the pointer while a polygon is being drawn, and the global
+  // view hides the outlines entirely, so both are excluded — otherwise a click
+  // meant for a vertex would kick off an analysis of whatever is underneath.
+  arcgisMap.view.on("click", async (event) => {
+    if (sketch?.state === "active") return;
+
+    // The whole-world raster has no features to hit test, so a click there picks
+    // the cell under the pointer instead of a region.
+    if (globalView.active) {
+      const point = event.mapPoint;
+      if (!point) return;
+      const lon = point.longitude ?? point.x;
+      const lat = point.latitude ?? point.y;
+      if (!Number.isFinite(lon) || !Number.isFinite(lat)) return;
+      plotPickedCell(lon, lat).catch((err) => console.error("Could not plot that cell", err));
+      return;
+    }
+
+    // Both layers: the published sets draw on boundaryLayer, the uploads on
+    // uploadedLayer, and only one of the two is ever visible. Without this an
+    // uploaded outline was unclickable — the row in the panel worked, the
+    // polygon on the map did not.
+    const layers = [boundaryLayer, uploadedLayer].filter((l) => l.visible);
+    if (!layers.length) return;
+    const {results} = await arcgisMap.view.hitTest(event, {include: layers});
+
+    // The whole set stays drawn while one region is analyzed, so a click inside
+    // the analyzed region lands on its own outline. Re-running it would throw
+    // away the analysis and rebuild the identical one.
+    const uploaded = results.find((r) => r.graphic?.layer === uploadedLayer);
+    if (uploaded) {
+      const id = uploaded.graphic.attributes?.regionId;
+      if (String(id) === activeRegionId) return;
+      const row = userRows.find((r) => r.id === id);
+      if (row) analyzeUserRegion(row);
+      return;
+    }
+    const hit = results.find((r) => r.graphic?.attributes?.id != null);
+    if (!hit || String(hit.graphic.attributes.id) === activeRegionId) return;
+    analyzeGlobalRegion({regionId: hit.graphic.attributes.id, name: hit.graphic.attributes.n});
+  });
+
+  // "Home" is the same thing the Regions button does: drop the analysis and go
+  // back to the full set of outlines.
+  crumbHome.addEventListener("click", () => resetLayers());
+
+  // Trends replace the region outlines' fill, so the two cannot be shown at
+  // once. Pressing again restores the plain symbology.
+  // Paint the stepper from the current window, and grey the ends. Called once
+  // the time axis has resolved, since the run of windows depends on how long the
+  // record is, and again after each step.
+  const fillTrendWindows = () => {
+    const options = trendWindowOptions();
+    let i = options.indexOf(trendState.years);
+    if (i < 0) {
+      // A window longer than the record — or the first paint — lands on All.
+      trendState.years = null;
+      i = options.length - 1;
+    }
+    trendWindowValue.textContent = trendState.years ? `${trendState.years} yr` : "All";
+    trendWindowDown.disabled = i === 0;
+    trendWindowUp.disabled = i === options.length - 1;
+  };
+
+  const stepTrendWindow = (delta) => {
+    const options = trendWindowOptions();
+    const i = options.indexOf(trendState.years);
+    const next = options[Math.min(options.length - 1, Math.max(0, (i < 0 ? options.length - 1 : i) + delta))];
+    if (next === trendState.years) return;
+    trendState.years = next;
+    fillTrendWindows();
+    if (!trendState.on || trendState.running) return;
+    if (trendState.mode === "global") runGlobalTrends();
+    else runTrends();
+  };
+
+  trendWindowDown.addEventListener("click", () => stepTrendWindow(-1));
+  trendWindowUp.addEventListener("click", () => stepTrendWindow(1));
+
+  // Both fits call this once the time axis has resolved.
+  onTrendWindowsReady = fillTrendWindows;
+
+  // Whichever fit suits the active view. Shared by the button and by the boot
+  // path, so starting trends means the same thing either way.
+  startTrends = () => (globalView.active ? runGlobalTrends() : runTrends());
+
+  trendsButton.addEventListener("click", () => {
+    if (trendState.running) return;
+    if (trendState.on) {
+      // In the global view the trend map replaced the animation, so turning it
+      // off means putting the animation back rather than restoring a symbol.
+      if (globalView.active) {
+        // Cleared before the redraw, so ensureTrendsForView at the end of
+        // analyzeGlobalView sees trends as off and leaves them off.
+        trendState.on = false;
+        trendState.mode = null;
+        trendState.varName = null;
+        trendsButton.setAttribute("aria-pressed", "false");
+        trendsLabel.textContent = "Analyze trends";
+        trendWindowField.classList.add("hidden");
+        trendLegendDiv.classList.add("hidden");
+        analyzeGlobalView({keepView: true});
+      } else {
+        setTrendsOff();
+      }
+      return;
+    }
+    startTrends();
+  });
+
+  regionFilter.addEventListener("input", applyRegionFilter);
+
+  // Comparison curves. Only the chart changes, so this asks for a redraw of the
+  // chart rather than of the whole analysis. With no analysis showing there is
+  // nothing to redraw and the choice is simply remembered for the next one.
+  syncSeriesToggles();
+  // The stylesheet carries the theme on its own. This repaints the few things it
+  // cannot reach: colours read into a chart at render time, and the swatches
+  // built from them.
+  lightModeToggle.addEventListener("change", (e) => setTheme(e.target.checked ? "light" : "dark"));
+  onThemeChange(() => {
+    // syncSettingsControls rebuilds the series rows, which come back unchecked,
+    // so syncSeriesToggles has to put their state back.
+    syncSettingsControls();
+    syncSeriesToggles();
+    updateMapLegend();
+    regionalSeriesHandler?.(); // the chart read its colours at render time
+  });
+
+  // Gaps are a chart concern only: the raster and the color bar say nothing
+  // about the months GRACE is missing.
+  fillGapsToggle.addEventListener("change", (e) => {
+    displayConfig.fillGaps = e.target.checked;
+    regionalSeriesHandler?.();
+  });
+
+  seriesToggles.addEventListener("change", (e) => {
+    const key = e.target.dataset?.series;
+    if (!key) return;
+    if (e.target.checked) extraSeries.add(key);
+    else extraSeries.delete(key);
+    regionalSeriesHandler?.();
+  });
 
   document
     .querySelector("#global-view-button")
@@ -1156,15 +2791,26 @@ const bootMapUi = async () => {
   // selected variable.
   variableSelect.addEventListener("change", () => {
     displayConfig.variable = variableSelect.value;
-    if (globalView.active) analyzeGlobalView({keepView: true});
-    else regionalVariableHandler?.();
+    syncSeriesToggles(); // the lock moves with the displayed layer
+    // A classification belongs to one variable; keeping it under another
+    // variable's name would be a lie, so it is recomputed.
+    if (trendState.on && trendState.varName !== displayConfig.variable) {
+      if (trendState.mode === "global") runGlobalTrends();
+      else runTrends();
+    }
+    if (globalView.active) {
+      const point = pickedCell && {lon: pickedCell.lon, lat: pickedCell.lat};
+      analyzeGlobalView({keepView: true}).then(() => {
+        if (point) plotPickedCell(point.lon, point.lat).catch(() => {});
+      });
+    } else regionalVariableHandler?.();
     // neither view active (instructions showing): the next analysis picks it up
   });
 
   // Enter the view the deployment opens with (VITE_DEFAULT_VIEW) now that the
   // map is ready. For the global view that means the loading bar shows and the
-  // world fills in on first paint; for the aquifer view it means the outlines
-  // and the instructions panel, at the camera .env configured — the aquifer
+  // world fills in on first paint; for the regional view it means the outlines
+  // and the instructions panel, at the camera .env configured — the region
   // button is what re-fits the map to the outlines' extent.
   if (DEFAULT_VIEW === "global") {
     analyzeGlobalView();
@@ -1173,19 +2819,64 @@ const bootMapUi = async () => {
     clearTimeseriesPanel(appInstructions);
   }
 
-  sketchTool.availableCreateTools = ["polygon"];
-  sketchTool.hideSelectionToolsRectangleSelection = true;
-  sketchTool.hideSelectionToolsLassoSelection = true;
-  sketchTool.layer.title = "User drawn polygons";
-  sketchTool.addEventListener("arcgisCreate", (e) => {
-    if (e.detail.state === "start") {
-      sketchTool.layer.removeAll();
+  arcgisMap.map.add(uploadedLayer);
+  arcgisMap.map.add(cellPickLayer);
+  arcgisMap.map.add(drawLayer);
+
+  loadRegionSets()
+    .then((first) => setRegionSet(first))
+    .catch(async (err) => {
+      // Without the manifest there is no set to show but the uploads, which are
+      // local and always available. Better than an empty panel.
+      console.error("Could not load the region sets", err);
+      regionSets = [MY_REGIONS];
+      regionSetSelect.replaceChildren(new Option(MY_REGIONS.label, MY_REGIONS.id));
+      await setRegionSet(MY_REGIONS);
+    })
+    // After the catch, not before it: a set that failed to load still has the
+    // uploads to classify, and a failure in the classification must not look
+    // like a failure to load the sets.
+    .then(() => {
+      if (displayConfig.trendsOnLoad) startTrends();
+    });
+
+  regionSetSelect.addEventListener("change", (e) => {
+    const set = regionSets.find((s) => s.id === e.target.value);
+    if (set) setRegionSet(set).catch((err) => console.error(`Could not load the ${set.label} regions`, err));
+  });
+  sketch = new SketchViewModel({
+    view: arcgisMap.view,
+    layer: drawLayer,
+    // "click" places a vertex per click and closes on double-click — the one
+    // mode worth keeping out of the five the widget offered.
+    defaultCreateOptions: {mode: "click"},
+    polygonSymbol: drawnSymbol,
+  });
+
+  const setDrawing = (drawing) => {
+    drawButton.setAttribute("aria-pressed", String(drawing));
+    drawLabel.textContent = drawing ? "Click to place points" : "Draw a polygon";
+  };
+
+  sketch.on("create", (e) => {
+    if (e.state === "start") drawLayer.removeAll();
+    if (e.state === "complete") {
+      setDrawing(false);
+      analyzeDrawnPolygon({polygon: e.graphic.geometry});
     }
-    if (e.detail.state === "complete") {
-      const polygon = e.detail.graphic.geometry;
-      analyzeDrawnPolygon({polygon});
+    if (e.state === "cancel") setDrawing(false);
+  });
+
+  // One button, two jobs: start a polygon, or abandon the one being drawn.
+  drawButton.addEventListener("click", () => {
+    if (sketch.state === "active") {
+      sketch.cancel();
+      setDrawing(false);
+      return;
     }
-  })
+    setDrawing(true);
+    sketch.create("polygon");
+  });
 
   document
     .querySelector("#refresh-layers")
@@ -1228,11 +2919,16 @@ const bootMapUi = async () => {
   const updateAnomalyLayerAppearance = () => {
     // Global raster: restyle from the same stops, opacity, and cell boundaries
     if (globalView.active && globalView.byVar[displayConfig.variable]?.data) {
+      // The trend map is the same raster on a different scale, so a palette or
+      // opacity change restyles it without reverting it to anomalies.
+      const showingTrends = trendState.on && trendState.mode === "global";
       globalView.renderer.layer.opacity = displayConfig.opacity;
-      globalView.renderer.setStops(generateStops());
-      globalView.renderer.setBorders({show: displayConfig.showBorders, width: displayConfig.borderWidth});
+      globalView.renderer.setStops(showingTrends ? trendCategoryStops() : generateStops());
+      globalView.renderer.setBorders(globalBorderConfig());
       globalView.renderer.redraw();
-      updateMapLegend();
+      // The trend classes are fixed colors, so a palette change leaves them
+      // alone and the category legend already describes them.
+      if (!showingTrends) updateMapLegend();
       return; // no regional feature layer while the global view is active
     }
     const anomalyLayer = arcgisMap.map.layers.find(l => l.title === "GRACE Anomalies");
@@ -1244,8 +2940,11 @@ const bootMapUi = async () => {
       type: "simple",
       symbol: {
         type: "simple-fill",
+        // Black over a pale basemap, white over imagery, for the same reason
+        // the region outlines switch. The mascon outlines take a hue of their
+        // own so the two grids stay apart where their edges coincide.
         outline: displayConfig.showBorders
-          ? {color: [0, 0, 0, 1], width: displayConfig.borderWidth}
+          ? {color: darkBasemap ? [255, 255, 255, 0.85] : [0, 0, 0, 1], width: displayConfig.borderWidth}
           : {color: [0, 0, 0, 0], width: 0}
       },
       visualVariables: [{
@@ -1279,8 +2978,8 @@ const bootMapUi = async () => {
 
   // Color palette radio buttons (generated in syncSettingsControls, so one
   // delegated listener rather than one per palette)
-  paletteOptions.addEventListener("change", (e) => {
-    if (e.target.name !== "color-palette") return;
+  paletteSelect.addEventListener("change", (e) => {
+    palettePreview.style.background = paletteCssGradient(e.target.value);
     displayConfig.colorPalette = e.target.value;
     updateAnomalyLayerAppearance();
   });
@@ -1298,6 +2997,12 @@ const bootMapUi = async () => {
     applyLegendVisibility();
   });
 
+  // Region names. labelsVisible is live, so this is a repaint and nothing more.
+  regionNamesToggle.addEventListener("change", (e) => {
+    displayConfig.showRegionNames = e.target.checked;
+    boundaryLayer.labelsVisible = displayConfig.showRegionNames;
+  });
+
   // GRACE mascon footprints. The first switch-on fetches the GeoJSON; every
   // later toggle is just layer visibility.
   masconToggle.addEventListener("change", (e) => {
@@ -1313,12 +3018,6 @@ const bootMapUi = async () => {
     masconLayer.renderer = masconRenderer();
   });
 
-  // Half degree cells. Reloads from the other store, so it is the one setting
-  // here that costs a download rather than a restyle.
-  halfDegreeToggle.addEventListener("change", (e) => {
-    setHalfDegreeCells(e.target.checked);
-  });
-
   // ---- Upload modal ----
   const uploadModal = document.getElementById("upload-modal");
   const uploadDropZone = document.getElementById("upload-drop-zone");
@@ -1326,6 +3025,8 @@ const bootMapUi = async () => {
   const uploadBrowseButton = document.getElementById("upload-browse-button");
   const uploadFileInfo = document.getElementById("upload-file-info");
   const uploadFileName = document.getElementById("upload-file-name");
+  const uploadRegionName = document.getElementById("upload-region-name");
+  const fileStem = (filename) => filename.replace(/\.(geo)?json$/i, "");
   const uploadClearFile = document.getElementById("upload-clear-file");
   const uploadError = document.getElementById("upload-error");
   const uploadSubmit = document.getElementById("upload-submit");
@@ -1343,6 +3044,7 @@ const bootMapUi = async () => {
     uploadSubmit.disabled = true;
     uploadSubmit.textContent = "Analyze";
     uploadDropZone.classList.remove("hidden");
+    uploadRegionName.value = "";
   };
 
   const showUploadError = (message) => {
@@ -1366,6 +3068,8 @@ const bootMapUi = async () => {
     }
 
     selectedFile = file;
+    // The file name is the default, not an override: a name already typed stays.
+    if (!uploadRegionName.value.trim()) uploadRegionName.value = fileStem(file.name);
     uploadFileName.textContent = file.name;
     uploadFileInfo.classList.remove("hidden");
     uploadDropZone.classList.add("hidden");
@@ -1429,17 +3133,19 @@ const bootMapUi = async () => {
 
     try {
       const {polygon} = await parseGeoJSONFile(selectedFile);
+      const name = uploadRegionName.value.trim() || fileStem(selectedFile.name);
       uploadModal.classList.add("hidden");
-      sketchTool.layer.removeAll();
-      sketchTool.layer.add(new Graphic({
-        geometry: polygon,
-        symbol: {
-          type: "simple-fill",
-          color: [255, 255, 255, 0],
-          outline: {color: [0, 0, 0, 1], width: 2}
-        }
-      }));
-      await analyzeDrawnPolygon({polygon});
+      // Saved before it is analyzed, so it survives the trip Home and the next
+      // visit. loadUserRegions draws it and lists it; analyzing it then goes
+      // through the same path as clicking its row.
+      const saved = await addUserRegion({name, polygon});
+      // The upload belongs to My Regions, so that is where it is shown.
+      if (activeRegionSet.file) {
+        regionSetSelect.value = MY_REGIONS.id;
+        await setRegionSet(MY_REGIONS, {select: false});
+      }
+      const row = regionRows.find((r) => r.id === saved.id);
+      await analyzeUserRegion(row ?? {id: saved.id, name, rings: saved.rings, user: true});
     } catch (err) {
       showUploadError(err.message);
       uploadSubmit.disabled = false;

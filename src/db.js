@@ -1,6 +1,7 @@
 // ---- IndexedDB minimal helpers ----
 import {get} from "zarrita";
 
+import {DATA_VERSION} from "./dataVersion.js";
 import {openZarrArray} from "./zarrStore.js";
 
 const DB_NAME = "gldas-zarr-cache";
@@ -48,6 +49,34 @@ export async function idbGet(key) {
     const store = tx.objectStore(STORE_NAME);
     const req = store.get(key);
     req.onsuccess = () => resolve(req.result ?? null);
+    req.onerror = () => reject(req.error);
+    tx.oncomplete = () => db.close();
+  });
+}
+
+/**
+ * Delete every cached entry that does not carry the current DATA_VERSION.
+ *
+ * Bumping the version changes the keys, which is what makes the app refetch —
+ * but the entries under the old keys are not overwritten, they are simply never
+ * read again. A global frame buffer is the whole downsampled world series, so
+ * leaving them would grow this database by that much on every data rebuild.
+ *
+ * Best effort and never awaited: a browser that refuses the transaction just
+ * keeps the old rows.
+ */
+export async function pruneStaleCache() {
+  const db = await openCacheDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, "readwrite");
+    const store = tx.objectStore(STORE_NAME);
+    const req = store.getAllKeys();
+    req.onsuccess = () => {
+      const stale = req.result.filter((key) => !String(key).includes(`|${DATA_VERSION}|`) && !String(key).endsWith(`|${DATA_VERSION}`));
+      for (const key of stale) store.delete(key);
+      if (stale.length) console.info(`Dropped ${stale.length} cache entries from an older data version`);
+      resolve(stale.length);
+    };
     req.onerror = () => reject(req.error);
     tx.oncomplete = () => db.close();
   });
@@ -101,7 +130,8 @@ function unpackTypedArray(record) {
 }
 
 async function getOrFetch1DCoord(zarrUrl, varName) {
-  const key = `coord|${zarrUrl}|${varName}`
+  // DATA_VERSION so a rebuilt store is refetched — see dataVersion.js.
+  const key = `coord|${zarrUrl}|${varName}|${DATA_VERSION}`
 
   // 1) Try cache
   const cached = await idbGet(key);

@@ -6,7 +6,7 @@
 //   2. Everything this app ships is resolved through asset(), which prefixes
 //      Vite's base path.
 //
-// A bare leading-slash path ("/aquifers.geojson") is always a bug: it resolves
+// A bare leading-slash path ("/regions.geojson") is always a bug: it resolves
 // against the *origin* root, so it works in dev and at a root deployment and
 // silently 404s — or, behind CloudFront, 503s — the moment the app is served
 // from a sub-path like /portal/grace/.
@@ -42,9 +42,16 @@ export const ZARR_URL_HALF_DEGREE = fromEnv(
   "https://d3hbj0z0f67zhd.cloudfront.net/ggg/grace-gldas-water-balance-0.5.zarr",
 ).replace(/\/+$/, "");
 
-// Aquifer outlines. Served from public/ by default; point VITE_AQUIFERS_URL at
-// an absolute https:// URL to serve the 2 MB file from a CDN instead.
-export const AQUIFERS_URL = fromEnv(import.meta.env.VITE_AQUIFERS_URL, asset("aquifers.geojson"));
+// The manifest listing the region sets the picker offers; each set's file is
+// resolved next to it. Served from public/ by default; point
+// VITE_REGION_SETS_URL at an absolute https:// URL to serve the sets from a CDN
+// instead, in which case the whole directory moves together.
+export const REGION_SETS_URL = fromEnv(import.meta.env.VITE_REGION_SETS_URL, asset("regions/index.json"));
+
+// A set's file, resolved against the manifest's own location so a set never has
+// to know where the directory ended up.
+export const regionSetUrl = (file) =>
+  /^https?:\/\//i.test(file) ? file : new URL(file, new URL(REGION_SETS_URL, window.location.href)).href;
 
 // The native 3 degree GRACE mascon footprints, written by
 // data/mascon_boundaries.py. Only the 1706 mascons touching land are shipped

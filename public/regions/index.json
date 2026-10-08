@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "The region sets the picker offers, in order. Each `file` is resolved next to",
+    "this manifest. `attribution` is displayed under the region list and must be",
+    "filled in for any set whose license requires it (IGRAC's CC BY-SA 3.0 IGO",
+    "does); null means nothing is shown.",
+    "",
+    "Every set is expected in the app's own schema: one feature per region, with",
+    "`n` (name) and `id` (unique within the set) properties, in WGS84. Converting",
+    "and simplifying a published dataset into that shape belongs in data/, not in",
+    "the app."
+  ],
+  "sets": [
+    {
+      "id": "global-aquifers",
+      "label": "Global Aquifers",
+      "file": "global-aquifers.geojson",
+      "attribution": "Compiled by the GEOGLOWS team from multiple sources, with gaps filled from Large Aquifer Systems of the World, WHYMAP (BGR/UNESCO) and Transboundary Aquifers of the World 2025 (UNESCO-IHP / IGRAC, CC BY-SA 3.0 IGO). Features added that way carry a src property."
+    },
+    {
+      "id": "whymap-lgas",
+      "label": "Large Aquifer Systems (WHYMAP)",
+      "file": "whymap-lgas.geojson",
+      "attribution": "Large Aquifer Systems of the World, WHYMAP (BGR/UNESCO), via UNESCO IHP-WINS",
+      "source": "https://ihp-wins.unesco.org/dataset/large-aquifer-systems-of-the-world"
+    },
+    {
+      "id": "igrac-tba",
+      "label": "Transboundary Aquifers (IGRAC)",
+      "file": "igrac-tba.geojson",
+      "attribution": "Transboundary Aquifers of the World 2025 \u00a9 UNESCO-IHP / IGRAC, CC BY-SA 3.0 IGO",
+      "source": "https://ihp-wins.unesco.org/en/dataset/2025-transboundary-aquifers-of-the-world"
+    },
+    {
+      "id": "usgs-principal",
+      "label": "Principal Aquifers, USA (USGS)",
+      "file": "usgs-principal.geojson",
+      "attribution": "Principal Aquifers of the United States, U.S. Geological Survey (public domain)",
+      "source": "https://water.usgs.gov/GIS/metadata/usgswrd/XML/aquifers_us.xml"
+    },
+    {
+      "id": "grdc-mrb",
+      "label": "Major River Basins (GRDC)",
+      "file": "grdc-mrb.geojson",
+      "attribution": "GRDC (2020): Major River Basins of the World, 2nd rev. ed. Koblenz: BfG. Incorporates data from HydroSHEDS (WWF). Non-commercial use only.",
+      "source": "https://grdc.bafg.de/products/basin_layers/major_rivers/"
+    }
+  ]
+}

@@ -37,12 +37,46 @@ const envList = (value, allowed, fallback) => {
 };
 
 // ---- the mapped variables --------------------------------------------------
+// `color` is the time series line for that variable, so switching layers is
+// visible in the chart and not only in its title. Four hues far enough apart to
+// tell at a glance on the panel's dark ground, each picked to suit its quantity
+// where one suggests itself: green for soil, near-white ice for snow.
+//
+// The map's anomaly cells are deliberately not colored from these — they carry
+// the diverging red/blue scale, which is about sign and magnitude rather than
+// about which variable is showing.
+// The key is the label: it is what the store calls the array, what the layer
+// dropdown shows in parentheses, and what a CSV column is headed, so the panel
+// and the legend say the same thing as everything else.
+// `resolution` is the grid each variable is read on, and it is a property of the
+// science rather than a user preference.
+//
+// TWSa is GRACE, distributed on a 0.5 degree grid, so that is where it is read.
+// Serving it at 1.0 degree averages across mascon edges — the 3 degree caps are
+// aligned to half-degree lines, so a 1.0 degree cell straddles two of them — and
+// produces intermediate values that are in no GRACE solution.
+//
+// Everything else is the GLDAS three-model mean, and JPL protocol is to bring
+// the models together on the coarsest of them: NOAH (0.25 degree) is averaged up
+// to VIC and CLSM's 1.0 degree, not the other way round. The half-degree store
+// builds these by downscaling VIC and CLSM instead, which manufactures detail
+// those models never had, so they are never read from it. GWSa is
+// TWSa - SWEa - CANa - SMa and can be no finer than its components.
+// `color` carries one hue per theme because a line has to be legible against the
+// ground it is drawn on, and one value cannot do both: SWEa's near-white
+// disappears on a pale chart, and the deep tones that work there go muddy on
+// near-black. The five stay in the same order and far enough apart in both.
 export const VARIABLES = {
-  GWSa: {short: "GWS", longName: "Groundwater Storage Anomaly"},
-  TWSa: {short: "TWS", longName: "Total Water Storage Anomaly"},
-  SMa: {short: "SM", longName: "Soil Moisture Anomaly"},
-  SWEa: {short: "SWE", longName: "Snow Water Equivalent Anomaly"},
+  GWSa: {longName: "Groundwater Storage Anomaly", color: {dark: "#60a5fa", light: "#2563eb"}, resolution: "1.0"},
+  TWSa: {longName: "Total Water Storage Anomaly", color: {dark: "#fb923c", light: "#ea580c"}, resolution: "0.5"},
+  SMa: {longName: "Soil Moisture Anomaly", color: {dark: "#34d399", light: "#059669"}, resolution: "1.0"},
+  SWEa: {longName: "Snow Water Equivalent Anomaly", color: {dark: "#e2e8f0", light: "#475569"}, resolution: "1.0"},
+  CANa: {longName: "Canopy Water Storage Anomaly", color: {dark: "#c084fc", light: "#7c3aed"}, resolution: "1.0"},
 };
+
+/** That variable's line colour for the theme now showing. */
+export const variableColor = (varName, light) =>
+  VARIABLES[varName].color[light ? "light" : "dark"];
 const VARIABLE_KEYS = Object.keys(VARIABLES);
 
 // ---- color palettes --------------------------------------------------------
@@ -122,9 +156,9 @@ export const MAP_CENTER = [
 export const MAP_ZOOM = envNumber(import.meta.env.VITE_MAP_ZOOM, 4, {min: 0, max: 46});
 
 // ---- what the app opens with -----------------------------------------------
-// "global" is the whole-world animation, "aquifer" is the regional view with
-// the aquifer outlines showing and the instructions in the chart panel.
-export const DEFAULT_VIEW = envChoice(import.meta.env.VITE_DEFAULT_VIEW, ["global", "aquifer"], "global");
+// "global" is the whole-world animation, "region" is the regional view with
+// the region outlines showing and the instructions in the chart panel.
+export const DEFAULT_VIEW = envChoice(import.meta.env.VITE_DEFAULT_VIEW, ["global", "region"], "global");
 export const DEFAULT_VARIABLE = envChoice(import.meta.env.VITE_DEFAULT_VARIABLE, VARIABLE_KEYS, "GWSa");
 export const DEFAULT_PALETTE = envChoice(import.meta.env.VITE_DEFAULT_COLOR_PALETTE, PALETTE_KEYS, "default");
 // Which variables are downloaded eagerly at startup, each in its own worker.
@@ -148,15 +182,50 @@ export const DISPLAY_DEFAULTS = {
   showBorders: envBool(import.meta.env.VITE_SETTINGS_SHOW_CELL_BORDERS, false),
   borderWidth: envNumber(import.meta.env.VITE_SETTINGS_CELL_BORDER_WIDTH, 0.5, {min: 0.5, max: 3}),
   showLegend: envBool(import.meta.env.VITE_SETTINGS_MAP_LEGEND_VISIBLE, true),
+  // Whether the time series line bridges the months GRACE has no data for —
+  // scattered gaps plus the ~11 month GRACE/GRACE-FO handover. On, the line is
+  // continuous and easier to read as a trend; off, it breaks at every gap and
+  // the record's coverage is visible instead.
+  fillGaps: envBool(import.meta.env.VITE_SETTINGS_FILL_GAPS, true),
+  // Whether the trend classification is already running when the app opens.
+  // On, because the first question of a map of aquifers is usually which of them
+  // are in trouble, and the classification answers it without a click. It costs
+  // the whole-world frames for the displayed variable, which the app prefetches
+  // at startup anyway (VITE_PREFETCH_VARIABLES).
+  trendsOnLoad: envBool(import.meta.env.VITE_SETTINGS_TRENDS_ON_LOAD, true),
+  // Region names drawn on the outlines in the regional view.
+  showRegionNames: envBool(import.meta.env.VITE_SETTINGS_SHOW_REGION_NAMES, true),
+  // Labels stay off until the view is zoomed in past this scale. Collision
+  // dropping alone is not enough at continent zoom: the names that survive are
+  // still longer than the regions they sit on, so they read as a wall of text
+  // over the map. This sits above the opening view's scale (zoom 5 is ~1:18.5M)
+  // so names are already up when the app loads, holding off only at continent
+  // zoom and wider. Larger shows them sooner.
+  regionLabelMinScale: envNumber(import.meta.env.VITE_SETTINGS_REGION_LABEL_MIN_SCALE, 25_000_000, {min: 0}),
   // The 3 degree GRACE mascon outlines. Off by default: it is an interpretation
   // aid, not data, and turning it on is what pays for the GeoJSON download.
   showMascons: envBool(import.meta.env.VITE_SETTINGS_SHOW_MASCONS, false),
   masconWidth: envNumber(import.meta.env.VITE_SETTINGS_MASCON_WIDTH, 0.75, {min: 0.5, max: 3}),
-  halfDegreeCells: envBool(import.meta.env.VITE_SETTINGS_HALF_DEGREE_CELLS, false),
   dynamicColorScale: envBool(import.meta.env.VITE_SETTINGS_DYNAMIC_COLOR_SCALE, true),
   fixedMaxValue: envNumber(import.meta.env.VITE_SETTINGS_FIXED_COLOR_SCALE_MAX, 30, {min: 1}),
   maxValue: envNumber(import.meta.env.VITE_SETTINGS_FIXED_COLOR_SCALE_MAX, 30, {min: 1}),
 };
+
+// ---- trend classification --------------------------------------------------
+// Where the five trend categories divide, in cm/year of liquid water equivalent.
+// A region losing more than `extreme` is an extreme decline, more than
+// `moderate` a decline, and within ±moderate static. The defaults are set
+// against known depletion: the High Plains and Central Valley run around -1 to
+// -2 cm/yr, so 0.5 separates a real signal from noise and 2.0 marks the cases
+// that are usually reported on their own.
+export const TREND_THRESHOLDS = {
+  moderate: envNumber(import.meta.env.VITE_TREND_MODERATE_CM_PER_YEAR, 0.5, {min: 0}),
+  extreme: envNumber(import.meta.env.VITE_TREND_EXTREME_CM_PER_YEAR, 2, {min: 0}),
+};
+// Months a region needs before it is classified rather than called
+// insufficient. GRACE has ~290 months with gaps, so this is a low bar that only
+// excludes regions almost entirely masked out.
+export const TREND_MIN_MONTHS = envNumber(import.meta.env.VITE_TREND_MIN_MONTHS, 24, {min: 2});
 
 // ---- time slider -----------------------------------------------------------
 export const GLOBAL_PLAY_RATE_MS = envNumber(import.meta.env.VITE_GLOBAL_PLAY_RATE_MS, 250, {min: 50});
