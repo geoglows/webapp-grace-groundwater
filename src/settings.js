@@ -62,13 +62,16 @@ const envList = (value, allowed, fallback) => {
 // builds these by downscaling VIC and CLSM instead, which manufactures detail
 // those models never had, so they are never read from it. GWSa is
 // TWSa - SWEa - CANa - SMa and can be no finer than its components.
+// `grace` marks the variables built from GRACE, which inherit its missing
+// months. Only those get the seasonal gap fill, and the CSV always carries a
+// filled column for each of them. The GLDAS terms have every month.
 // `color` carries one hue per theme because a line has to be legible against the
 // ground it is drawn on, and one value cannot do both: SWEa's near-white
 // disappears on a pale chart, and the deep tones that work there go muddy on
 // near-black. The five stay in the same order and far enough apart in both.
 export const VARIABLES = {
-  GWSa: {longName: "Groundwater Storage Anomaly", color: {dark: "#60a5fa", light: "#2563eb"}, resolution: "1.0"},
-  TWSa: {longName: "Total Water Storage Anomaly", color: {dark: "#fb923c", light: "#ea580c"}, resolution: "0.5"},
+  GWSa: {longName: "Groundwater Storage Anomaly", color: {dark: "#60a5fa", light: "#2563eb"}, resolution: "1.0", grace: true},
+  TWSa: {longName: "Total Water Storage Anomaly", color: {dark: "#fb923c", light: "#ea580c"}, resolution: "0.5", grace: true},
   SMa: {longName: "Soil Moisture Anomaly", color: {dark: "#34d399", light: "#059669"}, resolution: "1.0"},
   SWEa: {longName: "Snow Water Equivalent Anomaly", color: {dark: "#e2e8f0", light: "#475569"}, resolution: "1.0"},
   CANa: {longName: "Canopy Water Storage Anomaly", color: {dark: "#c084fc", light: "#7c3aed"}, resolution: "1.0"},
@@ -172,6 +175,8 @@ export const UNITS = envText(import.meta.env.VITE_UNITS_LABEL, "cm");
 export const VALUE_LABEL = envText(import.meta.env.VITE_VALUE_LABEL, "Liquid Water Equivalent");
 
 // ---- layer + color bar defaults --------------------------------------------
+export const GAP_FILL_MODES = ["none", "line", "seasonal"];
+
 // Seeds displayConfig in main.js and, through it, every control in the settings
 // modal. The user's changes live for the session only; a refresh returns to
 // whatever the deployment configured here.
@@ -182,11 +187,21 @@ export const DISPLAY_DEFAULTS = {
   showBorders: envBool(import.meta.env.VITE_SETTINGS_SHOW_CELL_BORDERS, false),
   borderWidth: envNumber(import.meta.env.VITE_SETTINGS_CELL_BORDER_WIDTH, 0.5, {min: 0.5, max: 3}),
   showLegend: envBool(import.meta.env.VITE_SETTINGS_MAP_LEGEND_VISIBLE, true),
-  // Whether the time series line bridges the months GRACE has no data for —
-  // scattered gaps plus the ~11 month GRACE/GRACE-FO handover. On, the line is
-  // continuous and easier to read as a trend; off, it breaks at every gap and
-  // the record's coverage is visible instead.
-  fillGaps: envBool(import.meta.env.VITE_SETTINGS_FILL_GAPS, true),
+  // What the time series does at the months GRACE has no data for — scattered
+  // gaps plus the ~11 month GRACE/GRACE-FO handover:
+  //   "none"      the line breaks at every gap, so the record's coverage shows
+  //   "line"      a straight segment joins the months either side
+  //   "seasonal"  the notebook's trend + seasonal model fills them (gapFill.js),
+  //               drawn so filled months can be told from observed ones
+  // VITE_SETTINGS_GAP_FILL names one. VITE_SETTINGS_FILL_GAPS, the on/off
+  // switch this replaced, is still honoured when the new one is unset — true is
+  // "line", false is "none" — so an existing deployment's .env keeps doing what
+  // it did.
+  gapFill: envChoice(
+    import.meta.env.VITE_SETTINGS_GAP_FILL,
+    GAP_FILL_MODES,
+    envBool(import.meta.env.VITE_SETTINGS_FILL_GAPS, true) ? "line" : "none",
+  ),
   // Whether the trend classification is already running when the app opens.
   // On, because the first question of a map of aquifers is usually which of them
   // are in trouble, and the classification answers it without a click. It costs

@@ -24,7 +24,7 @@ urls = []
 for model in ["NOAH025", "VIC10", "CLSM10"]:
     for year in range(2002, 2027):
         for month in range(1, 13):
-            urls.append(f"https://data.gesdisc.earthdata.nasa.gov/data/GLDAS/GLDAS_{model}_M.2.1/2000/GLDAS_{model}_M.A{year}{month:z02}.021.nc4")
+            urls.append(f"https://data.gesdisc.earthdata.nasa.gov/data/GLDAS/GLDAS_{model}_M.2.1/{year}/GLDAS_{model}_M.A{year}{month:02}.021.nc4")
 
 ```
 

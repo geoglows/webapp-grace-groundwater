@@ -49,6 +49,7 @@ import {
 } from "./settings.js";
 import {initPanelSplitter} from "./splitPanels.js";
 import {renderTimeseriesChart, seriesToCsv} from "./timeseriesChart.js";
+import {openRechargeView} from "./rechargeView.js";
 import {pruneStaleCache} from "./db.js";
 import {initTheme, isLight, onThemeChange, setTheme, theme} from "./theme.js";
 import {openZarrArray} from "./zarrStore.js";
@@ -259,7 +260,7 @@ const opacitySlider = document.getElementById("opacity-slider");
 const opacityValue = document.getElementById("opacity-value");
 const paletteSelect = document.getElementById("palette-select");
 const palettePreview = document.getElementById("palette-preview");
-const fillGapsToggle = document.getElementById("fill-gaps-toggle");
+const gapFillControl = document.getElementById("gap-fill-control");
 
 // Build the two lists that are generated from data rather than written out in
 // index.html — the layer dropdown from VARIABLES, the palette radios from
@@ -317,13 +318,17 @@ const syncSettingsControls = () => {
   legendToggle.checked = displayConfig.showLegend;
   regionNamesToggle.checked = displayConfig.showRegionNames;
   masconToggle.checked = displayConfig.showMascons;
-  fillGapsToggle.checked = displayConfig.fillGaps;
+  for (const radio of gapFillControl.querySelectorAll("input")) radio.checked = radio.value === displayConfig.gapFill;
   lightModeToggle.checked = isLight();
   masconWidthSlider.value = String(displayConfig.masconWidth);
   masconWidthValue.textContent = `${displayConfig.masconWidth}px`;
   dynamicScaleToggle.checked = displayConfig.dynamicColorScale;
   // The fixed range is configurable, so the sentence explaining it has to be too.
-  dynamicScaleNote.textContent = `When enabled, the color scale fits the actual min/max values in the selected region, with 0 always shown as the center color. When disabled, uses a fixed range of -${displayConfig.fixedMaxValue} to +${displayConfig.fixedMaxValue} ${UNITS}.`;
+  // The two dynamic fits are different on purpose: the global one is the 95th
+  // percentile (computeFrameStats in globalData.js) because ice-sheet margins
+  // would otherwise stretch the ramp until every aquifer reads as white, while a
+  // region is small enough that its true maximum is the useful bound.
+  dynamicScaleNote.textContent = `When enabled, the global map's scale runs to the 95th percentile of |value| over all cells and months, so a few extreme cells saturate. In a region it runs to the largest |value| among the region's cells over all months. 0 is always the center color. When disabled, the range is fixed at -${displayConfig.fixedMaxValue} to +${displayConfig.fixedMaxValue} ${UNITS}.`;
 };
 
 // The displayed layer is checked and locked: the chart always carries what the
@@ -338,10 +343,6 @@ const syncSeriesToggles = () => {
   }
 };
 
-// Which of the two resolutions the app is currently reading. Every zarr read,
-// every IndexedDB cache key, and every derived quantity (cell size, the raster's
-// georeferencing) follows this, so the 1.0 and 0.5 degree stores never mix —
-// and switching back to one already loaded costs nothing but a cache hit.
 // Two frames: one for the browser to lay out the chart panel that exitGlobalView
 // just revealed, one for the view's resize observer to pick up its new size.
 const afterLayout = () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
@@ -679,16 +680,25 @@ const setRegionSet = async (set, {select = true} = {}) => {
   // the new set.
   clearAnalysis();
 
-  const index = arcgisMap.map?.layers?.indexOf(boundaryLayer) ?? -1;
-  const previous = boundaryLayer;
-  boundaryLayer = makeBoundaryLayer(set.file ? regionSetUrl(set.file) : null);
-  applyOutlineVisibility();
-  if (arcgisMap.map) {
-    arcgisMap.map.remove(previous);
-    // Back where it was, so the mascons and the anomaly raster keep their order.
-    if (index >= 0) arcgisMap.map.add(boundaryLayer, index);
-    else arcgisMap.map.add(boundaryLayer);
+  // My Regions keeps whatever boundary layer is already there instead of
+  // building one. It has no file, and a GeoJSONLayer with no URL fails its load
+  // the moment it is added to the map, logging two SDK errors on every visit to
+  // the set. Nothing reads the outgoing layer while My Regions is showing:
+  // applyOutlineVisibility hides it, ensureRegionRings and fitRegionSet branch
+  // on the set before touching it, and the view's click handler only hit-tests
+  // visible layers. The next published set replaces it as usual.
+  if (set.file) {
+    const index = arcgisMap.map?.layers?.indexOf(boundaryLayer) ?? -1;
+    const previous = boundaryLayer;
+    boundaryLayer = makeBoundaryLayer(regionSetUrl(set.file));
+    if (arcgisMap.map) {
+      arcgisMap.map.remove(previous);
+      // Back where it was, so the mascons and the anomaly raster keep their order.
+      if (index >= 0) arcgisMap.map.add(boundaryLayer, index);
+      else arcgisMap.map.add(boundaryLayer);
+    }
   }
+  applyOutlineVisibility();
 
   regionAttribution.textContent = set.attribution ?? "";
   regionAttribution.classList.toggle("hidden", !set.attribution);
@@ -1283,7 +1293,7 @@ const plotPickedCell = async (lon, lat) => {
       // Only the lone series can show a band, so only then is it worth reading.
       const uncertainty = wanted.length === 1 ? await cellUncertainty(varName, iy, ix) : null;
       if (runId !== analysisRunSeq) return;
-      const entry = {name: varName, longName, color, values, uncertainty};
+      const entry = {name: varName, longName, color, values, uncertainty, grace: VARIABLES[varName].grace};
 
       if (trendState.on) {
         const {from, label} = trendWindow();
@@ -1335,7 +1345,7 @@ const plotPickedCell = async (lon, lat) => {
     series,
     units: UNITS,
     valueLabel: VALUE_LABEL,
-    fillGaps: displayConfig.fillGaps,
+    gapFill: displayConfig.gapFill,
     fileStem: `grace_cell_${lat.toFixed(2)}_${lon.toFixed(2)}`,
     getCsv: async () => {
       const all = Object.keys(VARIABLES);
@@ -1351,11 +1361,31 @@ const plotPickedCell = async (lon, lat) => {
               name: v,
               values: cellSeries(data, iy, ix),
               uncertainty: await cellUncertainty(v, iy, ix),
+              grace: VARIABLES[v].grace,
             });
           }
         } catch { /* a variable that will not load is left out of the file */ }
       }
       return seriesToCsv({dates: timeDates, series: cols});
+    },
+    // Recharge is a groundwater quantity, so the page always works on GWSa,
+    // whichever layer the chart is showing.
+    onRecharge: async () => {
+      await ensureGlobalData("GWSa");
+      const coords = await ensureCoords(resolutionOf("GWSa"));
+      const {iy, ix} = cellIndexAt(lon, lat, coords);
+      const data = globalView.byVar.GWSa?.data;
+      if (!data) return;
+      if (!geodeticAreaOperator.isLoaded()) await geodeticAreaOperator.load();
+      const half = (coords.lat.data[1] - coords.lat.data[0]) / 2;
+      const cell = cellPolygonFromCenter({xCenter: coords.lon.data[ix], yCenter: coords.lat.data[iy], halfWidth: half});
+      openRechargeView({
+        name: `Cell at ${formatLatLon(coords.lat.data[iy], coords.lon.data[ix])}`,
+        dates: timeDates,
+        values: cellSeries(data, iy, ix),
+        uncertainty: await cellUncertainty("GWSa", iy, ix),
+        areaKm2: geodeticAreaOperator.execute(cell) / 1e6,
+      });
     },
   });
   activeChart.setMarker(timeControl?.currentDate ?? null);
@@ -1532,15 +1562,23 @@ const applyRegionFilter = () => {
     row.element.hidden = !match;
     if (match) shown++;
   }
-  const empty = regionList.querySelector(".rfs-list-empty");
-  if (shown === 0 && !empty) {
-    const p = document.createElement("p");
-    p.className = "rfs-list-empty";
-    p.textContent = "No regions match.";
-    regionList.append(p);
-  } else if (shown > 0) {
+  // An empty My Regions is a set with nothing in it yet, not a filter that
+  // missed, and "No regions match." read as the latter — with no hint that the
+  // set fills from the Upload button and the draw tool.
+  const message = !regionRows.length && !activeRegionSet.file
+    ? "No saved regions yet. Use Upload, or Draw a polygon on the map."
+    : shown === 0 ? "No regions match." : null;
+  let empty = regionList.querySelector(".rfs-list-empty");
+  if (!message) {
     empty?.remove();
+    return;
   }
+  if (!empty) {
+    empty = document.createElement("p");
+    empty.className = "rfs-list-empty";
+    regionList.append(empty);
+  }
+  empty.textContent = message;
 };
 
 // The native 3 degree GRACE mascon footprints (data/mascon_boundaries.py). This
@@ -1591,7 +1629,11 @@ const applyMasconVisibility = () => {
     masconLayerAdded = true;
     // Below the region outlines, which stay clickable on top, and above the
     // anomaly raster, which both views insert at index 0.
-    arcgisMap.map.add(masconLayer, arcgisMap.map.layers.indexOf(boundaryLayer));
+    // The boundary layer is not on the map when the manifest failed and My
+    // Regions is the only set (setRegionSet never adds one for it); on top then.
+    const index = arcgisMap.map.layers.indexOf(boundaryLayer);
+    if (index >= 0) arcgisMap.map.add(masconLayer, index);
+    else arcgisMap.map.add(masconLayer);
   }
   masconLayer.visible = displayConfig.showMascons;
 };
@@ -2239,7 +2281,7 @@ const main = async ({polygon, zoomTarget}) => {
   };
 
   const seriesFor = (varName) => {
-    const {longName} = VARIABLES[varName];
+    const {longName, grace} = VARIABLES[varName];
     const color = variableColor(varName, isLight());
     const d = varData[varName];
     const entry = {
@@ -2248,6 +2290,7 @@ const main = async ({polygon, zoomTarget}) => {
       color,
       values: d.meanSeries,
       uncertainty: d.uncMeanSeries, // null when the store has no <var>_unc array
+      grace,
     };
 
     // While the region classification is showing, each plotted series carries
@@ -2290,7 +2333,7 @@ const main = async ({polygon, zoomTarget}) => {
       series,
       units: UNITS,
       valueLabel: VALUE_LABEL,
-      fillGaps: displayConfig.fillGaps,
+      gapFill: displayConfig.gapFill,
       fileStem: `grace_${displayConfig.variable.toLowerCase()}`,
       // Every variable, not only the plotted ones: a file whose columns depend
       // on what happened to be toggled is a poor record of the region. The ones
@@ -2301,6 +2344,19 @@ const main = async ({polygon, zoomTarget}) => {
         return seriesToCsv({
           dates: timeDates,
           series: all.filter((v) => varData[v]?.hasData).map(seriesFor),
+        });
+      },
+      // Always GWSa, whichever layer is displayed: recharge is a groundwater
+      // quantity. The name is the region's, as the breadcrumb shows it.
+      onRecharge: async () => {
+        const d = await loadVarData("GWSa");
+        if (!d?.hasData) return;
+        openRechargeView({
+          name: breadcrumb.querySelector(".rfs-crumb-current")?.textContent || "Selected region",
+          dates: timeDates,
+          values: d.meanSeries,
+          uncertainty: d.uncMeanSeries,
+          areaKm2: geodeticAreaOperator.execute(polygon) / 1e6,
         });
       },
     });
@@ -2769,9 +2825,10 @@ const bootMapUi = async () => {
   });
 
   // Gaps are a chart concern only: the raster and the color bar say nothing
-  // about the months GRACE is missing.
-  fillGapsToggle.addEventListener("change", (e) => {
-    displayConfig.fillGaps = e.target.checked;
+  // about the months GRACE is missing. Trends ignore the setting too — trends.js
+  // fits the observed months whichever way the chart draws the gaps.
+  gapFillControl.addEventListener("change", (e) => {
+    displayConfig.gapFill = e.target.value;
     regionalSeriesHandler?.();
   });
 

@@ -24,12 +24,9 @@ const fromEnv = (value, fallback) => {
 };
 
 // The zarr store holding every mapped variable, its coordinates, and time axis.
-// data/main.py writes one store per target resolution, and the app can be
-// pointed at either: the 1.0 degree store is what it loads by default, and the
-// half degree store is opt-in (the "half degree water balance cells" setting,
-// defaulting to VITE_SETTINGS_HALF_DEGREE_CELLS). Everything downstream —
-// cell size, the map raster's georeferencing, the IndexedDB cache keys — is
-// derived from whichever store is active, so the two never mix.
+// data/main.py writes one store per target resolution. The app reads both:
+// TWSa from the half degree store and every other variable from the 1.0 degree
+// store (each variable's resolution is set in VARIABLES in settings.js).
 export const ZARR_URL = fromEnv(
   import.meta.env.VITE_ZARR_URL_ONE_DEGREE,
 ).replace(/\/+$/, "");

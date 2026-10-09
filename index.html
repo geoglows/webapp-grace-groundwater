@@ -54,10 +54,20 @@
          is showing. -->
     <p class="rfs-label rfs-label-spaced">Time series</p>
     <div id="series-toggles" class="rfs-checks rfs-checks-grid"></div>
-    <label class="rfs-check rfs-check-wide">
-      <input type="checkbox" id="fill-gaps-toggle">
-      <span>Fill gaps in the record</span>
-    </label>
+    <!-- Radios rather than a select: three short choices fit on one row, and
+         all of them stay visible. main.js checks the configured one. -->
+    <p id="gap-fill-label" class="rfs-sublabel">Gap filling</p>
+    <div id="gap-fill-control" class="rfs-segmented" role="radiogroup" aria-labelledby="gap-fill-label">
+      <label title="Break the line at months with no GRACE data">
+        <input type="radio" name="gap-fill" value="none"><span>None</span>
+      </label>
+      <label title="Join the months either side of a gap with a straight line">
+        <input type="radio" name="gap-fill" value="line"><span>Straight line</span>
+      </label>
+      <label title="Fill gaps with a trend + seasonal model fitted to the observed months; filled months are marked">
+        <input type="radio" name="gap-fill" value="seasonal"><span>Seasonal model</span>
+      </label>
+    </div>
 
     <label class="rfs-label rfs-label-spaced" for="palette-select">Color ramp</label>
     <select id="palette-select" class="rfs-select"></select>
@@ -518,7 +528,9 @@
         <span id="mascon-width-value" class="rfs-modal-value min-w-[40px] text-sm"></span>
       </div>
       <p class="rfs-modal-note mb-3 text-[13px]">
-        GRACE is originally provided on 3 degree cells known as mascons before being downscaled to 1.0 and 0.5 degree anomaly cells.
+        GRACE solves for mass change on 3 degree cells called mascons, and that is the true resolution of
+        the data. Every 0.5 degree TWSa cell repeats the value of the mascon it sits in, and the 1.0 degree
+        layers average those cells with GLDAS terms that vary from cell to cell. The finer grids add no GRACE detail.
       </p>
     </div>
 
@@ -542,8 +554,11 @@
         <label for="dynamic-scale-toggle" class="min-w-[120px] text-sm">Dynamic scale (fit to data)</label>
         <input type="checkbox" id="dynamic-scale-toggle" class="rfs-modal-check size-[18px]">
       </div>
-      <p id="dynamic-scale-note" class="rfs-modal-note mb-3 text-[13px]">When enabled, the color scale fits the actual
-                                                                          min/max values in the selected region, with 0 always shown as the center color.</p>
+      <!-- Rewritten by syncSettingsControls (main.js), which adds the configured
+           fixed range; this copy only shows if that never runs. -->
+      <p id="dynamic-scale-note" class="rfs-modal-note mb-3 text-[13px]">When enabled, the global map's scale runs to the
+        95th percentile of |value| over all cells and months, so a few extreme cells saturate. In a region it runs to the
+        largest |value| among the region's cells over all months. 0 is always the center color.</p>
     </div>
 
     <div class="mb-6">
