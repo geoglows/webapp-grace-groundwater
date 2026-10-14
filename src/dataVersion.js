@@ -15,6 +15,10 @@
  * History:
  *   1  original
  *   2  CANa stored as float32 rounded to 4 decimals rather than whole cm,
- *      which had made it identically zero (data/main.py)
+ *      which had made it identically zero (data/main.py). Shipped before the
+ *      stores were actually rebuilt, so it invalidated nothing.
+ *   3  the rebuild itself: CANa no longer zero, GLDAS anomalies against the
+ *      2004-2009 baseline, GRACE RL06.3 v4 as of 202607, record extended to
+ *      2026-06.
  */
-export const DATA_VERSION = "v2";
+export const DATA_VERSION = "v3";
