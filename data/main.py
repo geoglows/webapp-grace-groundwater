@@ -60,12 +60,27 @@ class Gldas:
     lon_variable = "lon"
     time_variable = "time"
 
+    def _open(self) -> xr.Dataset:
+        """
+        Open the model's monthly record, from either the NASA .nc4 files or a
+        single zarr store holding the same raw variables.
+
+        The zarr form is what gldas_zarrs.py writes and what the apps bucket
+        keeps under ggg/. Reading it turns the GLDAS side of a rebuild into a
+        1.4 GB download instead of ~860 files from NASA, and the variables are
+        identical, so the anomalies come out the same either way.
+        """
+        if len(self.files) == 1 and self.files[0].suffix == '.zarr':
+            print(f"[{self.model}] Reading zarr store {self.files[0].name}")
+            return xr.open_zarr(self.files[0], consolidated=False)
+        return xr.open_mfdataset(self.files, combine='by_coords')
+
     def prepare_dataset(self, resolution, lats=None, lons=None) -> xr.Dataset:
         """
         Prepare GLDAS dataset for GWSa calculation
         """
         print(f"[{self.model}] Preparing dataset from {len(self.files)} files")
-        ds = xr.open_mfdataset(self.files, combine='by_coords')
+        ds = self._open()
         ds = ds[self.snow_water_variables + self.canopy_variables + self.soil_moisture_variables]
         print(f"[{self.model}] Loading data into memory")
         ds.load()
@@ -141,11 +156,29 @@ if __name__ == "__main__":
 
     output_dataset = output_directory / f'grace-gldas-water-balance-{target_resolution}.zarr'
 
-    print("Globbing GLDAS input files")
-    gldas_noah_files = natsorted((root / 'gldas' / 'GLDAS_NOAH025_M.2.1').glob('*/GLDAS*.nc4'))
-    gldas_vic_files = natsorted((root / 'gldas' / 'GLDAS_VIC10_M.2.1').glob('*/GLDAS*.nc4'))
-    gldas_clsm_files = natsorted((root / 'gldas' / 'GLDAS_CLSM10_M.2.1').glob('*/GLDAS*.nc4'))
-    print(f"Found files -> NOAH: {len(gldas_noah_files)}, VIC: {len(gldas_vic_files)}, CLSM: {len(gldas_clsm_files)}")
+    def gldas_input(model: str) -> list[Path]:
+        """
+        Where to read one GLDAS model from: the zarr store under gldas_zarrs/ if
+        it is there, otherwise the monthly .nc4 files under gldas/.
+
+        Both hold the same raw variables. The zarr store is the cheap path --
+        it is what the apps bucket publishes under ggg/, so a rebuild can pull
+        1.4 GB from there instead of ~860 files from NASA.
+        """
+        store = root / 'gldas_zarrs' / f'{model}.zarr'
+        if store.is_dir():
+            return [store]
+        files = natsorted((root / 'gldas' / model).glob('*/GLDAS*.nc4'))
+        assert files, f"No zarr store at {store} and no .nc4 files under {root / 'gldas' / model}"
+        return files
+
+    print("Locating GLDAS input data")
+    gldas_noah_files = gldas_input('GLDAS_NOAH025_M.2.1')
+    gldas_vic_files = gldas_input('GLDAS_VIC10_M.2.1')
+    gldas_clsm_files = gldas_input('GLDAS_CLSM10_M.2.1')
+    describe = lambda f: f[0].name if len(f) == 1 and f[0].suffix == '.zarr' else f'{len(f)} .nc4 files'
+    print(f"Found -> NOAH: {describe(gldas_noah_files)}, "
+          f"VIC: {describe(gldas_vic_files)}, CLSM: {describe(gldas_clsm_files)}")
 
     print("Opening GRACE MASCON dataset")
     grace = (
