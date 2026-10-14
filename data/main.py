@@ -62,18 +62,39 @@ class Gldas:
 
     def _open(self) -> xr.Dataset:
         """
-        Open the model's monthly record, from either the NASA .nc4 files or a
-        single zarr store holding the same raw variables.
+        Open the model's monthly record from whatever it was handed: a zarr
+        store, NASA .nc4 files, or both.
 
-        The zarr form is what gldas_zarrs.py writes and what the apps bucket
-        keeps under ggg/. Reading it turns the GLDAS side of a rebuild into a
-        1.4 GB download instead of ~860 files from NASA, and the variables are
-        identical, so the anomalies come out the same either way.
+        Both because the apps bucket's zarr stores lag the NASA archive. The
+        store covers the bulk of the record in a 1.4 GB download instead of
+        ~860 files; .nc4 months newer than the store extend it to the present
+        without re-fetching what the store already holds. A month in both is
+        taken from the store, since they hold the same values.
         """
-        if len(self.files) == 1 and self.files[0].suffix == '.zarr':
-            print(f"[{self.model}] Reading zarr store {self.files[0].name}")
-            return xr.open_zarr(self.files[0], consolidated=False)
-        return xr.open_mfdataset(self.files, combine='by_coords')
+        wanted = self.snow_water_variables + self.canopy_variables + self.soil_moisture_variables
+        parts = []
+        for store in (f for f in self.files if f.suffix == '.zarr'):
+            print(f"[{self.model}] Reading zarr store {store.name}")
+            parts.append(xr.open_zarr(store, consolidated=False)[wanted])
+        netcdfs = [f for f in self.files if f.suffix != '.zarr']
+        if netcdfs:
+            print(f"[{self.model}] Reading {len(netcdfs)} .nc4 file(s)")
+            parts.append(xr.open_mfdataset(netcdfs, combine='by_coords')[wanted])
+
+        if len(parts) == 1:
+            return parts[0]
+
+        ds = xr.concat(parts, dim=self.time_variable)
+        # concat aligns the non-concatenated coords by union, so a lat/lon
+        # mismatch between the store and the .nc4 files would silently pad both
+        # with NaN rather than fail. Catch that here instead of at write time.
+        for axis in (self.lat_variable, self.lon_variable):
+            assert ds.sizes[axis] == parts[0].sizes[axis], (
+                f"[{self.model}] {axis} grew from {parts[0].sizes[axis]} to {ds.sizes[axis]} when joining "
+                f"the zarr store to the .nc4 files -- their grids do not line up"
+            )
+        _, first = np.unique(ds[self.time_variable].values, return_index=True)
+        return ds.isel({self.time_variable: np.sort(first)}).sortby(self.time_variable)
 
     def prepare_dataset(self, resolution, lats=None, lons=None) -> xr.Dataset:
         """
@@ -158,25 +179,31 @@ if __name__ == "__main__":
 
     def gldas_input(model: str) -> list[Path]:
         """
-        Where to read one GLDAS model from: the zarr store under gldas_zarrs/ if
-        it is there, otherwise the monthly .nc4 files under gldas/.
+        Where to read one GLDAS model from: the zarr store under gldas_zarrs/
+        and any monthly .nc4 files under gldas/, together.
 
-        Both hold the same raw variables. The zarr store is the cheap path --
-        it is what the apps bucket publishes under ggg/, so a rebuild can pull
-        1.4 GB from there instead of ~860 files from NASA.
+        Both hold the same raw variables. The store is the cheap path -- it is
+        what the apps bucket publishes under ggg/, so a rebuild pulls 1.4 GB
+        from there instead of ~860 files from NASA. The store trails the NASA
+        archive by a few months, so .nc4 files for the months past its end
+        carry the record up to the present.
         """
+        inputs = []
         store = root / 'gldas_zarrs' / f'{model}.zarr'
         if store.is_dir():
-            return [store]
-        files = natsorted((root / 'gldas' / model).glob('*/GLDAS*.nc4'))
-        assert files, f"No zarr store at {store} and no .nc4 files under {root / 'gldas' / model}"
-        return files
+            inputs.append(store)
+        inputs.extend(natsorted((root / 'gldas' / model).glob('*/GLDAS*.nc4')))
+        assert inputs, f"No zarr store at {store} and no .nc4 files under {root / 'gldas' / model}"
+        return inputs
 
     print("Locating GLDAS input data")
     gldas_noah_files = gldas_input('GLDAS_NOAH025_M.2.1')
     gldas_vic_files = gldas_input('GLDAS_VIC10_M.2.1')
     gldas_clsm_files = gldas_input('GLDAS_CLSM10_M.2.1')
-    describe = lambda f: f[0].name if len(f) == 1 and f[0].suffix == '.zarr' else f'{len(f)} .nc4 files'
+    def describe(inputs: list[Path]) -> str:
+        stores = [f.name for f in inputs if f.suffix == '.zarr']
+        n_nc4 = sum(1 for f in inputs if f.suffix != '.zarr')
+        return ' + '.join(stores + ([f'{n_nc4} .nc4 files'] if n_nc4 else []))
     print(f"Found -> NOAH: {describe(gldas_noah_files)}, "
           f"VIC: {describe(gldas_vic_files)}, CLSM: {describe(gldas_clsm_files)}")
 
