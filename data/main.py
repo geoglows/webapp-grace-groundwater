@@ -137,7 +137,6 @@ if __name__ == "__main__":
     print(f"Using GRACE MASCON file: {grace_mascon}")
 
     target_resolution = args.resolution
-    target_resolution = 1.0
     assert target_resolution in (0.5, 1.0), f"Target resolution must be either 0.5 or 1.0 degree"
 
     output_dataset = output_directory / f'grace-gldas-water-balance-{target_resolution}.zarr'
