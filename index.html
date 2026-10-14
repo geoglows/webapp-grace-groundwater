@@ -6,6 +6,24 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>GRACE Regional Analyst</title>
   <script>
+    // Resolve the theme before the first paint. theme.js owns this decision, but
+    // it cannot run until main.js and its 13 MB of map SDK have loaded, which is
+    // long enough to show a dark page and then flip it to light. Dark needs no
+    // attribute, so only light is set here. Keep the key and the fallback in
+    // step with theme.js.
+    (function () {
+      try {
+        var saved = localStorage.getItem("ggg-theme");
+        var light = saved === "light"
+          || (saved !== "dark" && window.matchMedia
+              && window.matchMedia("(prefers-color-scheme: light)").matches);
+        if (light) document.documentElement.dataset.theme = "light";
+      } catch (e) {
+        // storage disabled: fall through to the stylesheet's dark default
+      }
+    })();
+  </script>
+  <script>
     window.__GEOGLOWS_INITIAL_URL__ = {
       hash: window.location.hash,
       search: window.location.search,
