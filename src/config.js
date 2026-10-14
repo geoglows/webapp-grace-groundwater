@@ -36,7 +36,7 @@ export const ZARR_URL = fromEnv(
 // reports the store as unavailable if it is switched on anyway.
 export const ZARR_URL_HALF_DEGREE = fromEnv(
   import.meta.env.VITE_ZARR_URL_HALF_DEGREE,
-  "https://d3hbj0z0f67zhd.cloudfront.net/ggg/grace-gldas-water-balance-0.5.zarr",
+  "https://cdn.apps.geoglows.org/ggg/grace-gldas-water-balance-0.5-v3.zarr",
 ).replace(/\/+$/, "");
 
 // The manifest listing the region sets the picker offers; each set's file is
